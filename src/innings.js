@@ -211,6 +211,116 @@ inningsRouter.get('/live', async (req, res) => {
     }
 })
 
+// GET /matches/:matchId/innings/:inningId/scorecard → Batting & Bowling stats for an inning
+inningsRouter.get('/:inningId/scorecard', async (req, res) => {
+    try {
+        const { matchId, inningId } = req.params
+        const inning = await prisma.inning.findUnique({
+            where: { id: inningId },
+            select: {
+                id: true,
+                matchId: true,
+                battingTeam: { select: { id: true, name: true, logoUrl: true } },
+                bowlingTeam: { select: { id: true, name: true, logoUrl: true } },
+                match: { select: { ballsPerOver: true } },
+            },
+        })
+        if (!inning || inning.matchId !== matchId) return res.status(404).json({ success: false, message: 'Inning not found' })
+
+        const [batting, bowling] = await Promise.all([
+            prisma.battingEntry.findMany({
+                where: { inningId },
+                select: {
+                    battingOrder: true,
+                    runs: true,
+                    ballsFaced: true,
+                    fours: true,
+                    sixes: true,
+                    out: true,
+                    dismissal: true,
+                    player: { select: { id: true, name: true } },
+                },
+                orderBy: [{ battingOrder: 'asc' }],
+            }),
+            prisma.bowlingEntry.findMany({
+                where: { inningId },
+                select: {
+                    balls: true,
+                    runsConceded: true,
+                    wickets: true,
+                    maidens: true,
+                    player: { select: { id: true, name: true } },
+                },
+                orderBy: [{ runsConceded: 'asc' }, { wickets: 'desc' }],
+            }),
+        ])
+
+        const ballsPerOver = inning.match.ballsPerOver
+        const bowlingOut = bowling.map((b) => {
+            const overs = Math.floor(b.balls / ballsPerOver)
+            const balls = b.balls % ballsPerOver
+            const economy = b.balls > 0 ? (b.runsConceded * ballsPerOver) / b.balls : 0
+            return {
+                playerId: b.player.id,
+                playerName: b.player.name,
+                overs: `${overs}.${balls}`,
+                balls: b.balls,
+                runsConceded: b.runsConceded,
+                wickets: b.wickets,
+                maidens: b.maidens,
+                economy: Number(economy.toFixed(2)),
+            }
+        })
+
+        const battingOut = batting.map((bt) => ({
+            playerId: bt.player.id,
+            playerName: bt.player.name,
+            battingOrder: bt.battingOrder,
+            runs: bt.runs,
+            ballsFaced: bt.ballsFaced,
+            fours: bt.fours,
+            sixes: bt.sixes,
+            out: bt.out,
+            dismissal: bt.dismissal || null,
+            strikeRate: bt.ballsFaced > 0 ? Number(((bt.runs / bt.ballsFaced) * 100).toFixed(2)) : 0,
+        }))
+
+        return res.json({
+            success: true,
+            data: {
+                matchId,
+                inningId,
+                battingTeam: inning.battingTeam,
+                bowlingTeam: inning.bowlingTeam,
+                batting: battingOut,
+                bowling: bowlingOut,
+            },
+        })
+    } catch (err) {
+        console.log(err)
+        return res.status(500).json({ success: false, message: 'Failed to load scorecard' })
+    }
+})
+
+// GET /matches/:matchId/innings/live-scorecard → Scorecard for latest inning
+inningsRouter.get('/live-scorecard', async (req, res) => {
+    try {
+        const { matchId } = req.params
+        const latest = await prisma.inning.findFirst({
+            where: { matchId },
+            orderBy: { inningNumber: 'desc' },
+            select: { id: true }
+        })
+        if (!latest) return res.status(404).json({ success: false, message: 'No innings started for this match' })
+        // Delegate to the specific inning scorecard
+        req.params.inningId = latest.id
+        return inningsRouter.handle({ ...req, url: req.url.replace('/live-scorecard', `/${latest.id}/scorecard`), method: 'GET' }, res)
+    } catch (err) {
+        console.log(err)
+        return res.status(500).json({ success: false, message: 'Failed to load live scorecard' })
+    }
+})
+
 // GET /matches/:matchId/innings/live-teams → Players of current batting/bowling teams
 inningsRouter.get('/live-teams', async (req, res) => {
     try {
@@ -455,6 +565,9 @@ inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
                 extras: ['WIDE', 'NO_BALL', 'BYE', 'LEG_BYE', 'PENALTY'].includes(ballType) ? ballType : null,
                 ballType,
                 wicket: wicket?.kind || null,
+                isFour: (ballType === 'NORMAL' || ballType === 'FREE_HIT') && runs === 4,
+                isSix: (ballType === 'NORMAL' || ballType === 'FREE_HIT') && runs === 6,
+                isWicket: Boolean(wicket?.kind),
                 shotType: shotType || null,
                 shotRegion: shotRegion || null,
             },
@@ -600,7 +713,23 @@ inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
             needNewBowler: state?.needNewBowler ?? (updatedInning.currentBowlerId == null),
         }
 
-        return res.status(201).json({ success: true, data: { ballId: createdBall.id, inning: updatedInning, state: stateWithNames, inningEnded } })
+        const isFourByBatsman = (ballType === 'NORMAL' || ballType === 'FREE_HIT') && runs === 4
+        const isSixByBatsman = (ballType === 'NORMAL' || ballType === 'FREE_HIT') && runs === 6
+        const isWicket = Boolean(wicket && wicket.kind)
+
+        return res.status(201).json({
+            success: true,
+            data: {
+                ballId: createdBall.id,
+                inning: updatedInning,
+                state: stateWithNames,
+                inningEnded,
+                isFourByBatsman,
+                isSixByBatsman,
+                isWicket,
+                wicketKind: wicket?.kind || null,
+            }
+        })
     } catch (err) {
         console.log(err)
         return res.status(500).json({ success: false, message: 'Failed to record ball' })
@@ -617,12 +746,12 @@ inningsRouter.post('/:inningId/next-ball', requireAuth, async (req, res) => {
 inningsRouter.get('/:inningId/balls', async (req, res) => {
     try {
         const { inningId } = req.params
-        const balls = await prisma.ball.findMany({
+        const rawBalls = await prisma.ball.findMany({
             where: { inningId },
-            select: { id: true, overNumber: true, ballInOver: true, batsmanId: true, bowlerId: true, runs: true, extras: true, ballType: true, wicket: true, shotType: true, shotRegion: true, createdAt: true },
+            select: { id: true, overNumber: true, ballInOver: true, batsmanId: true, bowlerId: true, runs: true, extras: true, ballType: true, wicket: true, isFour: true, isSix: true, isWicket: true, shotType: true, shotRegion: true, createdAt: true },
             orderBy: [{ overNumber: 'asc' }, { ballInOver: 'asc' }],
         })
-        return res.json({ success: true, data: balls })
+        return res.json({ success: true, data: rawBalls })
     } catch (err) {
         return res.status(500).json({ success: false, message: 'Failed to list balls' })
     }

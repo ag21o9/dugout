@@ -30,6 +30,10 @@ model Player {
   name         String
   battingStyle String?
   bowlingStyle String?
+  
+  // Lifetime aggregates (updated when a match ends)
+  totalRuns     Int      @default(0)
+  totalWickets  Int      @default(0)
 
   teams        TeamMembership[]
   batting      BattingEntry[]
@@ -149,6 +153,9 @@ model Match {
   winningTeam  Team?       @relation("WinnerTeam", fields: [winningTeamId], references: [id])
   winningTeamId String?
   winningMargin String?
+  
+  // Guard to ensure lifetime stats are applied only once per match
+  statsApplied  Boolean    @default(false)
 
   innings      Inning[]
   roles        MatchRole[]
@@ -206,6 +213,11 @@ model Ball {
   extras      String?  // wide, nb, bye, leg-bye, penalty
   ballType    BallType @default(NORMAL)
   wicket      String?  // e.g. "CAUGHT", "BOWLED"
+
+  // Convenience flags captured per ball
+  isFour      Boolean  @default(false)
+  isSix       Boolean  @default(false)
+  isWicket    Boolean  @default(false)
 
   shotType    String?
   shotRegion  String?

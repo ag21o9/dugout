@@ -122,7 +122,7 @@ matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
         const { winningTeamId, winningMargin, result } = req.body || {}
         const match = await prisma.match.findUnique({
             where: { id: matchId },
-            select: { id: true, status: true, teamAId: true, teamBId: true, tournament: { select: { organiser: true } } },
+            select: { id: true, status: true, teamAId: true, teamBId: true, statsApplied: true, tournament: { select: { organiser: true } } },
         })
         if (!match) return res.status(404).json({ success: false, message: 'Match not found' })
         if (match.tournament?.organiser && match.tournament.organiser !== req.user.id) {
@@ -134,16 +134,62 @@ matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
         if (winningTeamId && ![match.teamAId, match.teamBId].includes(winningTeamId)) {
             return res.status(400).json({ success: false, message: 'winningTeamId must be one of the match teams' })
         }
-        const updated = await prisma.match.update({
-            where: { id: matchId },
-            data: {
-                status: 'COMPLETED',
-                winningTeamId: winningTeamId || null,
-                winningMargin: winningMargin || null,
-                result: result || null,
-            },
-            select: { id: true, status: true, winningTeamId: true, winningMargin: true, result: true },
-        })
+        // Pre-aggregate lifetime stats from this match
+        let playerAgg = new Map()
+        if (!match.statsApplied) {
+            const inningIds = await prisma.inning.findMany({ where: { matchId }, select: { id: true } })
+            const ids = inningIds.map((i) => i.id)
+            const [batSums, bowlSums] = await Promise.all([
+                prisma.battingEntry.groupBy({
+                    by: ['playerId'],
+                    _sum: { runs: true },
+                    where: { inningId: { in: ids } },
+                }),
+                prisma.bowlingEntry.groupBy({
+                    by: ['playerId'],
+                    _sum: { wickets: true },
+                    where: { inningId: { in: ids } },
+                }),
+            ])
+            for (const row of batSums) {
+                const prev = playerAgg.get(row.playerId) || { runs: 0, wickets: 0 }
+                playerAgg.set(row.playerId, { runs: (prev.runs || 0) + (row._sum.runs || 0), wickets: prev.wickets || 0 })
+            }
+            for (const row of bowlSums) {
+                const prev = playerAgg.get(row.playerId) || { runs: 0, wickets: 0 }
+                playerAgg.set(row.playerId, { runs: prev.runs || 0, wickets: (prev.wickets || 0) + (row._sum.wickets || 0) })
+            }
+        }
+
+        const tx = []
+        // Apply player totals once
+        if (!match.statsApplied && playerAgg.size) {
+            for (const [playerId, vals] of playerAgg.entries()) {
+                const incData = {}
+                if (vals.runs) incData.totalRuns = vals.runs
+                if (vals.wickets) incData.totalWickets = vals.wickets
+                if (Object.keys(incData).length) {
+                    tx.push(prisma.player.update({ where: { id: playerId }, data: { totalRuns: { increment: incData.totalRuns || 0 }, totalWickets: { increment: incData.totalWickets || 0 } } }))
+                }
+            }
+        }
+        // Finalize match status and mark statsApplied
+        tx.push(
+            prisma.match.update({
+                where: { id: matchId },
+                data: {
+                    status: 'COMPLETED',
+                    winningTeamId: winningTeamId || null,
+                    winningMargin: winningMargin || null,
+                    result: result || null,
+                    statsApplied: true,
+                },
+                select: { id: true, status: true, winningTeamId: true, winningMargin: true, result: true, statsApplied: true },
+            })
+        )
+
+        const results = await prisma.$transaction(tx)
+        const updated = results[results.length - 1]
         return res.json({ success: true, data: updated })
     } catch (err) {
         return res.status(500).json({ success: false, message: 'Failed to end match' })
