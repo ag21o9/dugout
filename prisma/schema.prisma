@@ -19,6 +19,7 @@ model User {
 
   players   Player[]
   roles     MatchRole[]
+  ownedTeams Team[]   @relation("TeamOwner")
 }
 
 model Player {
@@ -46,6 +47,9 @@ model Team {
   name           String
   logoUrl        String?
   createdAt      DateTime          @default(now())
+
+  owner          User?             @relation("TeamOwner", fields: [ownerId], references: [id])
+  ownerId        String?
 
   members        TeamMembership[]
 

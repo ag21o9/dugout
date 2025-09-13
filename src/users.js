@@ -61,7 +61,11 @@ userRouter.post('/', async (req, res) => {
 			select: { id: true, name: true, email: true, phone: true, createdAt: true },
 		})
 
-		return res.status(201).json({ success: true, data: user })
+		const secret = process.env.JWT_SECRET
+		if (!secret) return res.status(500).json({ success: false, message: 'Server misconfigured: JWT_SECRET missing' })
+		const token = jwt.sign({ sub: user.id }, secret, { expiresIn: '7d' })
+
+		return res.status(201).json({ success: true, data: user, token })
 	} catch (err) {
 		if (err?.code === 'P2002' && err?.meta?.target?.includes('email')) {
 			return res.status(409).json({ success: false, message: 'Email already in use' })

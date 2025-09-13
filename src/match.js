@@ -1,6 +1,195 @@
 import express from 'express'
+import prisma from './prisma.js'
+import { requireAuth } from './middleware/auth.js'
 
-const matchRouter = express.Router();
+const matchRouter = express.Router()
 
+// POST /matches → Create match (standalone or tournament fixture)
+matchRouter.post('/', requireAuth, async (req, res) => {
+    try {
+        const {
+            tournamentId,
+            teamAId,
+            teamBId,
+            matchType,
+            ballType,
+            pitchType,
+            city,
+            town,
+            ground,
+            startTime,
+            oversLimit,
+            ballsPerOver,
+        } = req.body || {}
+
+        if (!teamAId || !teamBId || teamAId === teamBId) {
+            return res.status(400).json({ success: false, message: 'teamAId and teamBId are required and must be different' })
+        }
+        if (!matchType || !ballType || !pitchType || !startTime || typeof oversLimit !== 'number' || typeof ballsPerOver !== 'number') {
+            return res.status(400).json({ success: false, message: 'matchType, ballType, pitchType, startTime, oversLimit, ballsPerOver are required' })
+        }
+
+        // Validate teams exist
+        const [teamA, teamB] = await Promise.all([
+            prisma.team.findUnique({ where: { id: teamAId }, select: { id: true } }),
+            prisma.team.findUnique({ where: { id: teamBId }, select: { id: true } }),
+        ])
+        if (!teamA || !teamB) return res.status(404).json({ success: false, message: 'One or both teams not found' })
+
+        // If tournament fixture, validate registration and organiser
+        if (tournamentId) {
+            const tournament = await prisma.tournament.findUnique({ where: { id: tournamentId }, select: { id: true, organiser: true } })
+            if (!tournament) return res.status(404).json({ success: false, message: 'Tournament not found' })
+            if (tournament.organiser && tournament.organiser !== req.user.id) {
+                return res.status(403).json({ success: false, message: 'Only organiser can create fixtures' })
+            }
+            const [regA, regB] = await Promise.all([
+                prisma.tournamentTeam.findUnique({ where: { tournamentId_teamId: { tournamentId, teamId: teamAId } }, select: { id: true } }),
+                prisma.tournamentTeam.findUnique({ where: { tournamentId_teamId: { tournamentId, teamId: teamBId } }, select: { id: true } }),
+            ])
+            if (!regA || !regB) return res.status(400).json({ success: false, message: 'Both teams must be registered in tournament' })
+        }
+
+        const match = await prisma.match.create({
+            data: {
+                tournamentId: tournamentId || null,
+                teamAId,
+                teamBId,
+                matchType,
+                ballType,
+                pitchType,
+                city: city || null,
+                town: town || null,
+                ground: ground || null,
+                startTime: new Date(startTime),
+                oversLimit,
+                ballsPerOver,
+            },
+            select: {
+                id: true,
+                tournamentId: true,
+                teamA: { select: { id: true, name: true } },
+                teamB: { select: { id: true, name: true } },
+                matchType: true,
+                ballType: true,
+                pitchType: true,
+                city: true,
+                town: true,
+                ground: true,
+                startTime: true,
+                oversLimit: true,
+                ballsPerOver: true,
+                status: true,
+                createdAt: true,
+            },
+        })
+        return res.status(201).json({ success: true, data: match })
+    } catch (err) {
+        return res.status(500).json({ success: false, message: 'Failed to create match' })
+    }
+})
+
+// POST /matches/:matchId/start → Start a match (status → LIVE)
+matchRouter.post('/:matchId/start', requireAuth, async (req, res) => {
+    try {
+        const { matchId } = req.params
+        const existing = await prisma.match.findUnique({
+            where: { id: matchId },
+            select: { id: true, status: true, tournament: { select: { organiser: true } } },
+        })
+        if (!existing) return res.status(404).json({ success: false, message: 'Match not found' })
+        if (existing.tournament?.organiser && existing.tournament.organiser !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only tournament organiser can start this match' })
+        }
+        if (existing.status !== 'SCHEDULED') {
+            return res.status(400).json({ success: false, message: 'Only scheduled matches can be started' })
+        }
+        const updated = await prisma.match.update({ where: { id: matchId }, data: { status: 'LIVE' }, select: { id: true, status: true } })
+        return res.json({ success: true, data: updated })
+    } catch (err) {
+        return res.status(500).json({ success: false, message: 'Failed to start match' })
+    }
+})
+
+// POST /matches/:matchId/end → End a match (set winner, margin, result)
+matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
+    try {
+        const { matchId } = req.params
+        const { winningTeamId, winningMargin, result } = req.body || {}
+        const match = await prisma.match.findUnique({
+            where: { id: matchId },
+            select: { id: true, status: true, teamAId: true, teamBId: true, tournament: { select: { organiser: true } } },
+        })
+        if (!match) return res.status(404).json({ success: false, message: 'Match not found' })
+        if (match.tournament?.organiser && match.tournament.organiser !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only tournament organiser can end this match' })
+        }
+        if (!['SCHEDULED', 'LIVE'].includes(match.status)) {
+            return res.status(400).json({ success: false, message: 'Match already ended or invalid state' })
+        }
+        if (winningTeamId && ![match.teamAId, match.teamBId].includes(winningTeamId)) {
+            return res.status(400).json({ success: false, message: 'winningTeamId must be one of the match teams' })
+        }
+        const updated = await prisma.match.update({
+            where: { id: matchId },
+            data: {
+                status: 'COMPLETED',
+                winningTeamId: winningTeamId || null,
+                winningMargin: winningMargin || null,
+                result: result || null,
+            },
+            select: { id: true, status: true, winningTeamId: true, winningMargin: true, result: true },
+        })
+        return res.json({ success: true, data: updated })
+    } catch (err) {
+        return res.status(500).json({ success: false, message: 'Failed to end match' })
+    }
+})
+
+// GET /matches/:matchId → Get match details
+matchRouter.get('/:matchId', async (req, res) => {
+    try {
+        const { matchId } = req.params
+        const match = await prisma.match.findUnique({
+            where: { id: matchId },
+            select: {
+                id: true,
+                tournament: { select: { id: true, name: true } },
+                teamA: { select: { id: true, name: true, logoUrl: true } },
+                teamB: { select: { id: true, name: true, logoUrl: true } },
+                matchType: true,
+                ballType: true,
+                pitchType: true,
+                city: true,
+                town: true,
+                ground: true,
+                startTime: true,
+                oversLimit: true,
+                ballsPerOver: true,
+                status: true,
+                result: true,
+                winningTeam: { select: { id: true, name: true } },
+                winningMargin: true,
+                innings: {
+                    select: {
+                        id: true,
+                        inningNumber: true,
+                        battingTeam: { select: { id: true, name: true } },
+                        bowlingTeam: { select: { id: true, name: true } },
+                        runs: true,
+                        wickets: true,
+                        overs: true,
+                    },
+                    orderBy: { inningNumber: 'asc' },
+                },
+                createdAt: true,
+            },
+        })
+        if (!match) return res.status(404).json({ success: false, message: 'Match not found' })
+        return res.json({ success: true, data: match })
+    } catch (err) {
+        return res.status(500).json({ success: false, message: 'Failed to fetch match' })
+    }
+})
 
 export default matchRouter

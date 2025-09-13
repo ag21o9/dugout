@@ -11,8 +11,8 @@ teamsRouter.post('/', requireAuth, async (req, res) => {
     if (!name) return res.status(400).json({ success: false, message: 'name is required' })
 
     const team = await prisma.team.create({
-      data: { name, logoUrl: logoUrl || null },
-      select: { id: true, name: true, logoUrl: true, createdAt: true },
+      data: { name, logoUrl: logoUrl || null, ownerId: req.user.id },
+      select: { id: true, name: true, logoUrl: true, createdAt: true, ownerId: true },
     })
     return res.status(201).json({ success: true, data: team })
   } catch (err) {
@@ -20,11 +20,15 @@ teamsRouter.post('/', requireAuth, async (req, res) => {
   }
 })
 
-// PATCH /teams/:teamId → Update team info
+// PATCH /teams/:teamId → Update team info (owner only)
 teamsRouter.patch('/:teamId', requireAuth, async (req, res) => {
   try {
     const { teamId } = req.params
     const { name, logoUrl } = req.body || {}
+    // verify ownership
+    const existing = await prisma.team.findUnique({ where: { id: teamId }, select: { id: true, ownerId: true } })
+    if (!existing) return res.status(404).json({ success: false, message: 'Team not found' })
+    if (existing.ownerId !== req.user.id) return res.status(403).json({ success: false, message: 'Forbidden' })
     const data = {}
     if (name !== undefined) data.name = name
     if (logoUrl !== undefined) data.logoUrl = logoUrl
@@ -37,7 +41,6 @@ teamsRouter.patch('/:teamId', requireAuth, async (req, res) => {
     })
     return res.json({ success: true, data: team })
   } catch (err) {
-    if (err?.code === 'P2001') return res.status(404).json({ success: false, message: 'Team not found' })
     return res.status(500).json({ success: false, message: 'Failed to update team' })
   }
 })
@@ -101,3 +104,20 @@ teamsRouter.get('/', async (req, res) => {
 })
 
 export default teamsRouter
+// GET /teams/mine → My teams (owned and member)
+teamsRouter.get('/mine', requireAuth, async (req, res) => {
+  try {
+    const owned = await prisma.team.findMany({
+      where: { ownerId: req.user.id },
+      select: { id: true, name: true, logoUrl: true, createdAt: true },
+    })
+    const memberships = await prisma.teamMembership.findMany({
+      where: { player: { userId: req.user.id } },
+      select: { team: { select: { id: true, name: true, logoUrl: true, createdAt: true } } },
+    })
+    const memberTeams = memberships.map((m) => m.team)
+    return res.json({ success: true, data: { owned, member: memberTeams } })
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Failed to get my teams' })
+  }
+})
