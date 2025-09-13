@@ -1,12 +1,16 @@
 import express from 'express'
-import tournamentRouter from './tournament';
-import matchRouter from './match';
-import userRouter from './users';
+import tournamentRouter from './tournament.js'
+import matchRouter from './match.js'
+import userRouter from './users.js'
+import playersRouter from './players.js'
+import teamsRouter from './teams.js'
 
-const userRouter = express.Router();
+const apiRouter = express.Router()
 
-userRouter.use('/tournament', tournamentRouter);
-userRouter.use('/match', matchRouter);
-userRouter.use('/users', userRouter);
+apiRouter.use('/tournaments', tournamentRouter)
+apiRouter.use('/matches', matchRouter)
+apiRouter.use('/users', userRouter)
+apiRouter.use('/players', playersRouter)
+apiRouter.use('/teams', teamsRouter)
 
-export default userRouter
+export default apiRouter
