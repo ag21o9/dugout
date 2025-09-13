@@ -1,8 +1,12 @@
 import express from 'express'
 import prisma from './prisma.js'
 import { requireAuth } from './middleware/auth.js'
+import inningsRouter from './innings.js'
 
 const matchRouter = express.Router()
+
+// Mount innings router under a match
+matchRouter.use('/:matchId/innings', inningsRouter)
 
 // POST /matches → Create match (standalone or tournament fixture)
 matchRouter.post('/', requireAuth, async (req, res) => {
@@ -189,6 +193,47 @@ matchRouter.get('/:matchId', async (req, res) => {
         return res.json({ success: true, data: match })
     } catch (err) {
         return res.status(500).json({ success: false, message: 'Failed to fetch match' })
+    }
+})
+
+// GET /matches/:matchId/teams → Teams and members for this match
+matchRouter.get('/:matchId/teams', async (req, res) => {
+    try {
+        const { matchId } = req.params
+        const match = await prisma.match.findUnique({
+            where: { id: matchId },
+            select: { teamAId: true, teamBId: true, teamA: { select: { id: true, name: true, logoUrl: true } }, teamB: { select: { id: true, name: true, logoUrl: true } } }
+        })
+        if (!match) return res.status(404).json({ success: false, message: 'Match not found' })
+
+        const [teamAMembers, teamBMembers] = await Promise.all([
+            prisma.teamMembership.findMany({
+                where: { teamId: match.teamAId },
+                select: { role: true, player: { select: { id: true, name: true, battingStyle: true, bowlingStyle: true } } }
+            }),
+            prisma.teamMembership.findMany({
+                where: { teamId: match.teamBId },
+                select: { role: true, player: { select: { id: true, name: true, battingStyle: true, bowlingStyle: true } } }
+            })
+        ])
+
+        const mapMember = (m) => ({
+            id: m.player.id,
+            name: m.player.name,
+            battingStyle: m.player.battingStyle || null,
+            bowlingStyle: m.player.bowlingStyle || null,
+            role: m.role || null,
+        })
+
+        return res.json({
+            success: true,
+            data: {
+                teamA: { ...match.teamA, members: teamAMembers.map(mapMember) },
+                teamB: { ...match.teamB, members: teamBMembers.map(mapMember) },
+            }
+        })
+    } catch (err) {
+        return res.status(500).json({ success: false, message: 'Failed to fetch teams' })
     }
 })
 
