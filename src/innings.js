@@ -748,10 +748,47 @@ inningsRouter.get('/:inningId/balls', async (req, res) => {
         const { inningId } = req.params
         const rawBalls = await prisma.ball.findMany({
             where: { inningId },
-            select: { id: true, overNumber: true, ballInOver: true, batsmanId: true, bowlerId: true, runs: true, extras: true, ballType: true, wicket: true, isFour: true, isSix: true, isWicket: true, shotType: true, shotRegion: true, createdAt: true },
+            select: {
+                id: true,
+                overNumber: true,
+                ballInOver: true,
+                batsmanId: true,
+                bowlerId: true,
+                runs: true,
+                extras: true,
+                ballType: true,
+                wicket: true,
+                isFour: true,
+                isSix: true,
+                isWicket: true,
+                shotType: true,
+                shotRegion: true,
+                createdAt: true,
+                batsman: { select: { id: true, name: true } },
+                bowler: { select: { id: true, name: true } },
+            },
             orderBy: [{ overNumber: 'asc' }, { ballInOver: 'asc' }],
         })
-        return res.json({ success: true, data: rawBalls })
+        const balls = rawBalls.map(b => ({
+            id: b.id,
+            overNumber: b.overNumber,
+            ballInOver: b.ballInOver,
+            batsmanId: b.batsmanId,
+            batsmanName: b.batsman?.name || null,
+            bowlerId: b.bowlerId,
+            bowlerName: b.bowler?.name || null,
+            runs: b.runs,
+            extras: b.extras,
+            ballType: b.ballType,
+            wicket: b.wicket,
+            isFour: b.isFour,
+            isSix: b.isSix,
+            isWicket: b.isWicket,
+            shotType: b.shotType,
+            shotRegion: b.shotRegion,
+            createdAt: b.createdAt,
+        }))
+        return res.json({ success: true, data: balls })
     } catch (err) {
         return res.status(500).json({ success: false, message: 'Failed to list balls' })
     }

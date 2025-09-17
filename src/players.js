@@ -7,7 +7,7 @@ const playersRouter = express.Router()
 // POST /players → Create a player for a user
 playersRouter.post('/', requireAuth, async (req, res) => {
   try {
-    const { battingStyle, bowlingStyle } = req.body || {}
+    const { battingStyle, bowlingStyle, state, district, subDistrict, village, pincode, playingRole } = req.body || {}
     // if (!name) return res.status(400).json({ success: false, message: 'name is required' })
 
     const user = await prisma.user.findUnique({
@@ -22,8 +22,14 @@ playersRouter.post('/', requireAuth, async (req, res) => {
         name : user.name,
         battingStyle: battingStyle || null,
         bowlingStyle: bowlingStyle || null,
+        state: state || null,
+        district: district || null,
+        subDistrict: subDistrict || null,
+        village: village || null,
+        pincode: pincode || null,
+        playingRole: playingRole || null,
       },
-      select: { id: true, userId: true, name: true, battingStyle: true, bowlingStyle: true },
+      select: { id: true, userId: true, name: true, battingStyle: true, bowlingStyle: true, state: true, district: true, subDistrict: true, village: true, pincode: true, playingRole: true },
     })
     return res.status(201).json({ success: true, data: player })
   } catch (err) {
@@ -43,6 +49,12 @@ playersRouter.get('/:playerId', async (req, res) => {
         name: true,
         battingStyle: true,
         bowlingStyle: true,
+        state: true,
+        district: true,
+        subDistrict: true,
+        village: true,
+        pincode: true,
+        playingRole: true,
         user: { select: { id: true, name: true, email: true, phone: true } },
       },
     })
@@ -73,6 +85,12 @@ playersRouter.get('/by-phone/:phone', async (req, res) => {
         name: true,
         battingStyle: true,
         bowlingStyle: true,
+        state: true,
+        district: true,
+        subDistrict: true,
+        village: true,
+        pincode: true,
+        playingRole: true,
         user: { select: { id: true, name: true, email: true, phone: true } },
       },
     })
