@@ -143,3 +143,61 @@ userRouter.patch('/:userId', async (req, res) => {
 })
 
 export default userRouter
+
+// POST /users/register-with-player → Create user and player together and return token
+userRouter.post('/register-with-player', async (req, res) => {
+	try {
+		const userBody = req.body.user ?? req.body
+		const playerBody = req.body.player ?? req.body
+
+		const { name, email, phone, dob, gender } = userBody || {}
+		const { battingStyle, bowlingStyle, state, district, subDistrict, village, pincode, playingRole } = playerBody || {}
+
+		if (!name || !email) {
+			return res.status(400).json({ success: false, message: 'name and email are required' })
+		}
+
+		let dobDate = null
+		if (dob) {
+			const parsed = new Date(dob)
+			if (isNaN(parsed.getTime())) return res.status(400).json({ success: false, message: 'Invalid dob format' })
+			dobDate = parsed
+		}
+
+		const secret = process.env.JWT_SECRET
+		if (!secret) return res.status(500).json({ success: false, message: 'Server misconfigured: JWT_SECRET missing' })
+
+		const result = await prisma.$transaction(async (tx) => {
+			const createdUser = await tx.user.create({
+				data: { name, email, phone: phone || null, dob: dobDate, gender: gender || null },
+				select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, createdAt: true },
+			})
+
+			const createdPlayer = await tx.player.create({
+				data: {
+					userId: createdUser.id,
+					name: createdUser.name,
+					battingStyle: battingStyle || null,
+					bowlingStyle: bowlingStyle || null,
+					state: state || null,
+					district: district || null,
+					subDistrict: subDistrict || null,
+					village: village || null,
+					pincode: pincode || null,
+					playingRole: playingRole || null,
+				},
+				select: { id: true, userId: true, name: true, battingStyle: true, bowlingStyle: true, state: true, district: true, subDistrict: true, village: true, pincode: true, playingRole: true },
+			})
+
+			return { user: createdUser, player: createdPlayer }
+		})
+
+		const token = jwt.sign({ sub: result.user.id }, secret, { expiresIn: '7d' })
+		return res.status(201).json({ success: true, token, data: result })
+	} catch (err) {
+		if (err?.code === 'P2002' && err?.meta?.target?.includes('email')) {
+			return res.status(409).json({ success: false, message: 'Email already in use' })
+		}
+		return res.status(500).json({ success: false, message: 'Failed to register user and player' })
+	}
+})
