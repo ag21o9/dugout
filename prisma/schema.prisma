@@ -101,12 +101,15 @@ model Tournament {
   ground    String?
   organiser String?
   contact   String?
+  matchType MatchType?
   startDate DateTime?
   endDate   DateTime?
 
   category  String?
   ballType  BallSurface
   pitchType PitchSurface
+  prize String?
+  prizeType String?
 
   maxTeams Int
 
@@ -291,6 +294,7 @@ enum MatchType {
   LIMITED_OVERS
   BOX_TURF
   TENNIS_CRICKET
+  OTHER
 }
 
 enum BallSurface {

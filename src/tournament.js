@@ -21,9 +21,14 @@ tournamentRouter.post('/', requireAuth, async (req, res) => {
             ballType,
             pitchType,
             maxTeams,
+            prize,
+            prizeType,
             logoUrl,
+            matchType,
             bannerUrl,
         } = req.body || {}
+
+        console.log(req.body);
 
         if (!name || !ballType || !pitchType || typeof maxTeams !== 'number') {
             return res.status(400).json({
@@ -42,8 +47,11 @@ tournamentRouter.post('/', requireAuth, async (req, res) => {
                 startDate: toDate(startDate),
                 endDate: toDate(endDate),
                 category: category || null,
+                prize,
+                prizeType,
                 ballType,
                 pitchType,
+                matchType,
                 maxTeams,
                 logoUrl: logoUrl || null,
                 bannerUrl: bannerUrl || null,
@@ -68,6 +76,7 @@ tournamentRouter.post('/', requireAuth, async (req, res) => {
         })
         return res.status(201).json({ success: true, data: tournament })
     } catch (err) {
+        console.log(err)
         return res.status(500).json({ success: false, message: 'Failed to create tournament' })
     }
 })
@@ -205,8 +214,11 @@ tournamentRouter.get('/', async (req, res) => {
                 city: true,
                 ground: true,
                 organiser: true,
+                prize: true,
+                prizeType : true,
                 startDate: true,
                 endDate: true,
+                matchType : true,
                 category: true,
                 ballType: true,
                 pitchType: true,
