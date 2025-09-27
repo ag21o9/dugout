@@ -167,6 +167,8 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
                 contact: true,
                 startDate: true,
                 endDate: true,
+                prize : true,
+                prizeType : true,
                 category: true,
                 ballType: true,
                 pitchType: true,
@@ -177,7 +179,10 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
                 registeredTeams: {
                     select: {
                         id: true,
-                        team: { select: { id: true, name: true, logoUrl: true } },
+                        team: { select: { id: true, name: true, logoUrl: true, owner : {select : {
+                            name : true,
+                            phone : true
+                        }}} },
                         registeredAt: true,
                     },
                 },
@@ -197,6 +202,7 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
         if (!tournament) return res.status(404).json({ success: false, message: 'Tournament not found' })
         return res.json({ success: true, data: tournament })
     } catch (err) {
+        console.log(err)
         return res.status(500).json({ success: false, message: 'Failed to fetch tournament' })
     }
 })

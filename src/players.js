@@ -1,6 +1,7 @@
 import express from 'express'
 import prisma from './prisma.js'
 import { requireAuth } from './middleware/auth.js'
+import jwt from 'jsonwebtoken'
 
 const playersRouter = express.Router()
 
@@ -31,7 +32,12 @@ playersRouter.post('/', requireAuth, async (req, res) => {
       },
       select: { id: true, userId: true, name: true, battingStyle: true, bowlingStyle: true, state: true, district: true, subDistrict: true, village: true, pincode: true, playingRole: true },
     })
-    return res.status(201).json({ success: true, data: player })
+
+    const secret = process.env.JWT_SECRET
+
+    const token = jwt.sign({ sub: player.userId }, secret, { expiresIn: '7d' })
+        // return res.json({ success: true, token, user })
+    return res.status(201).json({ success: true, user: player, token })
   } catch (err) {
     console.log(err)
     return res.status(500).json({ success: false, message: 'Failed to create player' })

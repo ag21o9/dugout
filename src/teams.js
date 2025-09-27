@@ -79,6 +79,18 @@ teamsRouter.post('/:teamId/members', requireAuth, async (req, res) => {
 teamsRouter.get('/:teamId/members', async (req, res) => {
   try {
     const { teamId } = req.params
+    const teamname = await prisma.teamMembership.findFirst({
+      where: {
+        teamId
+      },
+      select: {
+        team: {
+          select: {
+            name: true
+          }
+        },
+      }
+    })
     const members = await prisma.teamMembership.findMany({
       where: { teamId },
       select: {
@@ -87,9 +99,50 @@ teamsRouter.get('/:teamId/members', async (req, res) => {
         player: { select: { id: true, name: true, battingStyle: true, bowlingStyle: true } },
       },
     })
-    return res.json({ success: true, data: members })
+    return res.json({ success: true, teamname: teamname?.team?.name ? teamname.team.name : '', data: members })
   } catch (err) {
+    console.log(err)
     return res.status(500).json({ success: false, message: 'Failed to list members' })
+  }
+})
+
+// DELETE /teams/:teamId/members → Remove player(s) from a team
+teamsRouter.delete('/:teamId/members', requireAuth, async (req, res) => {
+  try {
+    const { teamId } = req.params
+    const { playerIds } = req.body || {}
+
+    if (!Array.isArray(playerIds) || playerIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'playerIds array is required' })
+    }
+
+    // Validate team exists and check ownership (optional - you can remove this if any authenticated user can remove members)
+    const team = await prisma.team.findUnique({
+      where: { id: teamId },
+      select: { id: true, ownerId: true }
+    })
+    if (!team) return res.status(404).json({ success: false, message: 'Team not found' })
+
+    // Optional: Only team owner can remove members - uncomment if needed
+    if (team.ownerId !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Only team owner can remove members' })
+    }
+
+    // Remove memberships
+    const result = await prisma.teamMembership.deleteMany({
+      where: {
+        teamId,
+        playerId: { in: playerIds }
+      }
+    })
+
+    return res.json({
+      success: true,
+      message: `Removed ${result.count} player(s) from team`,
+      removedCount: result.count
+    })
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Failed to remove members' })
   }
 })
 
@@ -109,14 +162,43 @@ teamsRouter.get('/mine', requireAuth, async (req, res) => {
   try {
     const owned = await prisma.team.findMany({
       where: { ownerId: req.user.id },
-      select: { id: true, name: true, logoUrl: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        logoUrl: true,
+        createdAt: true,
+        _count: { select: { members: true } }
+      },
     })
+
     const memberships = await prisma.teamMembership.findMany({
       where: { player: { userId: req.user.id } },
-      select: { team: { select: { id: true, name: true, logoUrl: true, createdAt: true } } },
+      select: {
+        team: {
+          select: {
+            id: true,
+            name: true,
+            logoUrl: true,
+            createdAt: true,
+            _count: { select: { members: true } }
+          }
+        }
+      },
     })
-    const memberTeams = memberships.map((m) => m.team)
-    return res.json({ success: true, data: { owned, member: memberTeams } })
+
+    const ownedTeams = owned.map(team => ({
+      ...team,
+      playerCount: team._count.members,
+      _count: undefined
+    }))
+
+    const memberTeams = memberships.map((m) => ({
+      ...m.team,
+      playerCount: m.team._count.members,
+      _count: undefined
+    }))
+
+    return res.json({ success: true, data: { owned: ownedTeams, member: memberTeams } })
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Failed to get my teams' })
   }
