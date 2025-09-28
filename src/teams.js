@@ -1,17 +1,28 @@
 import express from 'express'
 import prisma from './prisma.js'
 import { requireAuth } from './middleware/auth.js'
+import { upload, uploadImageBuffer } from '../config/utils.js'
 
 const teamsRouter = express.Router()
 
 // POST /teams → Create a team
-teamsRouter.post('/', requireAuth, async (req, res) => {
+teamsRouter.post('/', requireAuth, upload.single('logo'), async (req, res) => {
   try {
     const { name, logoUrl } = req.body || {}
     if (!name) return res.status(400).json({ success: false, message: 'name is required' })
 
+    // Handle logo upload if provided
+    let finalLogoUrl = logoUrl || null
+    if (req.file) {
+      try {
+        finalLogoUrl = await uploadImageBuffer(req.file.buffer)
+      } catch (uploadErr) {
+        return res.status(500).json({ success: false, message: 'Failed to upload team logo' })
+      }
+    }
+
     const team = await prisma.team.create({
-      data: { name, logoUrl: logoUrl || null, ownerId: req.user.id },
+      data: { name, logoUrl: finalLogoUrl, ownerId: req.user.id },
       select: { id: true, name: true, logoUrl: true, createdAt: true, ownerId: true },
     })
     return res.status(201).json({ success: true, data: team })
@@ -21,7 +32,7 @@ teamsRouter.post('/', requireAuth, async (req, res) => {
 })
 
 // PATCH /teams/:teamId → Update team info (owner only)
-teamsRouter.patch('/:teamId', requireAuth, async (req, res) => {
+teamsRouter.patch('/:teamId', requireAuth, upload.single('logo'), async (req, res) => {
   try {
     const { teamId } = req.params
     const { name, logoUrl } = req.body || {}
@@ -29,9 +40,20 @@ teamsRouter.patch('/:teamId', requireAuth, async (req, res) => {
     const existing = await prisma.team.findUnique({ where: { id: teamId }, select: { id: true, ownerId: true } })
     if (!existing) return res.status(404).json({ success: false, message: 'Team not found' })
     if (existing.ownerId !== req.user.id) return res.status(403).json({ success: false, message: 'Forbidden' })
+    
     const data = {}
     if (name !== undefined) data.name = name
     if (logoUrl !== undefined) data.logoUrl = logoUrl
+    
+    // Handle logo upload if provided
+    if (req.file) {
+      try {
+        data.logoUrl = await uploadImageBuffer(req.file.buffer)
+      } catch (uploadErr) {
+        return res.status(500).json({ success: false, message: 'Failed to upload team logo' })
+      }
+    }
+
     if (Object.keys(data).length === 0) return res.status(400).json({ success: false, message: 'No fields to update' })
 
     const team = await prisma.team.update({
@@ -96,7 +118,7 @@ teamsRouter.get('/:teamId/members', async (req, res) => {
       select: {
         id: true,
         role: true,
-        player: { select: { id: true, name: true, battingStyle: true, bowlingStyle: true } },
+        player: { select: { id: true, name: true, battingStyle: true, bowlingStyle: true, profilepic: true } },
       },
     })
     return res.json({ success: true, teamname: teamname?.team?.name ? teamname.team.name : '', data: members })

@@ -1,6 +1,7 @@
 import express from 'express'
 import prisma from './prisma.js'
 import { requireAuth } from './middleware/auth.js'
+import { upload, uploadImageBuffer } from '../config/utils.js'
 
 const tournamentRouter = express.Router()
 
@@ -8,9 +9,12 @@ const tournamentRouter = express.Router()
 const toDate = (v) => (v ? new Date(v) : undefined)
 
 // POST /tournaments → Create tournament (organiser is current user)
-tournamentRouter.post('/', requireAuth, async (req, res) => {
+tournamentRouter.post('/', requireAuth, upload.fields([
+    { name: 'logo', maxCount: 1 },
+    { name: 'banner', maxCount: 1 }
+]), async (req, res) => {
     try {
-        const {
+        let {
             name,
             city,
             ground,
@@ -30,11 +34,33 @@ tournamentRouter.post('/', requireAuth, async (req, res) => {
 
         console.log(req.body);
 
+        maxTeams = parseInt(maxTeams);
+
         if (!name || !ballType || !pitchType || typeof maxTeams !== 'number') {
             return res.status(400).json({
                 success: false,
                 message: 'name, ballType, pitchType, maxTeams are required',
             })
+        }
+
+        // Handle image uploads
+        let finalLogoUrl = logoUrl || null
+        let finalBannerUrl = bannerUrl || null
+
+        if (req.files?.logo?.[0]) {
+            try {
+                finalLogoUrl = await uploadImageBuffer(req.files.logo[0].buffer)
+            } catch (uploadErr) {
+                return res.status(500).json({ success: false, message: 'Failed to upload tournament logo' })
+            }
+        }
+
+        if (req.files?.banner?.[0]) {
+            try {
+                finalBannerUrl = await uploadImageBuffer(req.files.banner[0].buffer)
+            } catch (uploadErr) {
+                return res.status(500).json({ success: false, message: 'Failed to upload tournament banner' })
+            }
         }
 
         const tournament = await prisma.tournament.create({
@@ -53,8 +79,8 @@ tournamentRouter.post('/', requireAuth, async (req, res) => {
                 pitchType,
                 matchType,
                 maxTeams,
-                logoUrl: logoUrl || null,
-                bannerUrl: bannerUrl || null,
+                logoUrl: finalLogoUrl,
+                bannerUrl: finalBannerUrl,
             },
             select: {
                 id: true,
@@ -167,8 +193,8 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
                 contact: true,
                 startDate: true,
                 endDate: true,
-                prize : true,
-                prizeType : true,
+                prize: true,
+                prizeType: true,
                 category: true,
                 ballType: true,
                 pitchType: true,
@@ -179,10 +205,16 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
                 registeredTeams: {
                     select: {
                         id: true,
-                        team: { select: { id: true, name: true, logoUrl: true, owner : {select : {
-                            name : true,
-                            phone : true
-                        }}} },
+                        team: {
+                            select: {
+                                id: true, name: true, logoUrl: true, owner: {
+                                    select: {
+                                        name: true,
+                                        phone: true
+                                    }
+                                }
+                            }
+                        },
                         registeredAt: true,
                     },
                 },
@@ -221,10 +253,10 @@ tournamentRouter.get('/', async (req, res) => {
                 ground: true,
                 organiser: true,
                 prize: true,
-                prizeType : true,
+                prizeType: true,
                 startDate: true,
                 endDate: true,
-                matchType : true,
+                matchType: true,
                 category: true,
                 ballType: true,
                 pitchType: true,

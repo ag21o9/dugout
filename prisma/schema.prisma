@@ -11,13 +11,14 @@ datasource db {
 // User & Player
 // =====================
 model User {
-  id        String   @id @default(uuid())
-  name      String
-  email     String   @unique
-  phone     String?
-  dob       DateTime?
-  gender    Gender?
-  createdAt DateTime @default(now())
+  id         String    @id @default(uuid())
+  name       String
+  email      String    @unique
+  phone      String?
+  dob        DateTime?
+  gender     Gender?
+  profilepic String?
+  createdAt  DateTime  @default(now())
 
   players    Player[]
   roles      MatchRole[]
@@ -34,12 +35,13 @@ model Player {
   bowlingStyle String?
 
   // Location and profile
-  state        String?
-  district     String?
-  subDistrict  String?
-  village      String?
-  pincode      String?
-  playingRole  String? // e.g., top order, middle order, all-rounder
+  state       String?
+  district    String?
+  subDistrict String?
+  village     String?
+  pincode     String?
+  playingRole String? // e.g., top order, middle order, all-rounder
+  profilepic  String? // player profile picture URL
 
   // Lifetime aggregates (updated when a match ends)
   totalRuns    Int @default(0)
@@ -95,7 +97,7 @@ model TeamMembership {
 // Tournament
 // =====================
 model Tournament {
-  id        String    @id @default(uuid())
+  id        String     @id @default(uuid())
   name      String
   city      String?
   ground    String?
@@ -108,7 +110,7 @@ model Tournament {
   category  String?
   ballType  BallSurface
   pitchType PitchSurface
-  prize String?
+  prize     String?
   prizeType String?
 
   maxTeams Int
@@ -154,6 +156,7 @@ model Match {
   ballType  BallSurface
   pitchType PitchSurface
   city      String?
+  round     String?
   town      String?
   ground    String?
   startTime DateTime

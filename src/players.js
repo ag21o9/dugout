@@ -2,20 +2,29 @@ import express from 'express'
 import prisma from './prisma.js'
 import { requireAuth } from './middleware/auth.js'
 import jwt from 'jsonwebtoken'
+import { upload, uploadImageBuffer } from '../config/utils.js'
 
 const playersRouter = express.Router()
 
 // POST /players → Create a player for a user
-playersRouter.post('/', requireAuth, async (req, res) => {
+playersRouter.post('/', requireAuth, upload.single('profilepic'), async (req, res) => {
   try {
     const { battingStyle, bowlingStyle, state, district, subDistrict, village, pincode, playingRole } = req.body || {}
-    // if (!name) return res.status(400).json({ success: false, message: 'name is required' })
 
     const user = await prisma.user.findUnique({
         where : {
             id : req.user.id
         }
     });
+    // Handle profile picture upload if provided
+    let profilepicUrl = null
+    if (req.file) {
+      try {
+        profilepicUrl = await uploadImageBuffer(req.file.buffer)
+      } catch (uploadErr) {
+        return res.status(500).json({ success: false, message: 'Failed to upload profile picture' })
+      }
+    }
 
     const player = await prisma.player.create({
       data: {
@@ -29,8 +38,9 @@ playersRouter.post('/', requireAuth, async (req, res) => {
         village: village || null,
         pincode: pincode || null,
         playingRole: playingRole || null,
+        profilepic: profilepicUrl,
       },
-      select: { id: true, userId: true, name: true, battingStyle: true, bowlingStyle: true, state: true, district: true, subDistrict: true, village: true, pincode: true, playingRole: true },
+      select: { id: true, userId: true, name: true, battingStyle: true, bowlingStyle: true, state: true, district: true, subDistrict: true, village: true, pincode: true, playingRole: true, profilepic: true },
     })
 
     const secret = process.env.JWT_SECRET
@@ -61,6 +71,7 @@ playersRouter.get('/:playerId', async (req, res) => {
         village: true,
         pincode: true,
         playingRole: true,
+        profilepic: true,
         user: { select: { id: true, name: true, email: true, phone: true } },
       },
     })
@@ -97,6 +108,7 @@ playersRouter.get('/by-phone/:phone', async (req, res) => {
         village: true,
         pincode: true,
         playingRole: true,
+        profilepic: true,
         user: { select: { id: true, name: true, email: true, phone: true } },
       },
     })

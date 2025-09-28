@@ -1,6 +1,7 @@
 import express from 'express'
 import prisma from './prisma.js'
 import jwt from 'jsonwebtoken'
+import { upload, uploadImageBuffer } from '../config/utils.js'
 
 const userRouter = express.Router()
 
@@ -34,7 +35,7 @@ userRouter.post('/login/verify-otp', async (req, res) => {
 
 		const user = await prisma.user.findFirst({
 			where: { phone },
-			select: { id: true, name: true, email: true, phone: true, dob: true, gender: true },
+			select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, profilepic: true },
 		})
 		if (!user) return res.status(404).json({ success: false, message: 'User not found' })
 
@@ -49,7 +50,7 @@ userRouter.post('/login/verify-otp', async (req, res) => {
 })
 
 // POST /users → Create a user
-userRouter.post('/', async (req, res) => {
+userRouter.post('/', upload.single('profilepic'), async (req, res) => {
 	try {
 	const { name, email, phone, dob, gender } = req.body || {}
 
@@ -65,9 +66,20 @@ userRouter.post('/', async (req, res) => {
 			dobDate = parsed
 		}
 
+		// Handle profile picture upload if provided
+		let profilepicUrl = null
+		if (req.file) {
+			try {
+				profilepicUrl = await uploadImageBuffer(req.file.buffer)
+			} catch (uploadErr) {
+				console.log(uploadErr)
+				return res.status(500).json({ success: false, message: 'Failed to upload profile picture' })
+			}
+		}
+
 		const user = await prisma.user.create({
-			data: { name, email, phone: phone || null, dob: dobDate, gender: gender || null },
-			select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, createdAt: true },
+			data: { name, email, phone: phone || null, dob: dobDate, gender: gender || null, profilepic: profilepicUrl },
+			select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, profilepic: true, createdAt: true },
 		})
 
 		const secret = process.env.JWT_SECRET
@@ -89,7 +101,7 @@ userRouter.get('/:userId', async (req, res) => {
 		const { userId } = req.params
 		const user = await prisma.user.findUnique({
 			where: { id: userId },
-			select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, createdAt: true },
+			select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, profilepic: true, createdAt: true },
 		})
 		if (!user) {
 			return res.status(404).json({ success: false, message: 'User not found' })
@@ -101,7 +113,7 @@ userRouter.get('/:userId', async (req, res) => {
 })
 
 // PATCH /users/:userId → Update user profile
-userRouter.patch('/:userId', async (req, res) => {
+userRouter.patch('/:userId', upload.single('profilepic'), async (req, res) => {
 	try {
 		const { userId } = req.params
 	const { name, email, phone, dob, gender } = req.body || {}
@@ -121,6 +133,15 @@ userRouter.patch('/:userId', async (req, res) => {
 		}
 		if (gender !== undefined) data.gender = gender
 
+		// Handle profile picture upload if provided
+		if (req.file) {
+			try {
+				data.profilepic = await uploadImageBuffer(req.file.buffer)
+			} catch (uploadErr) {
+				return res.status(500).json({ success: false, message: 'Failed to upload profile picture' })
+			}
+		}
+
 		if (Object.keys(data).length === 0) {
 			return res.status(400).json({ success: false, message: 'No fields to update' })
 		}
@@ -128,7 +149,7 @@ userRouter.patch('/:userId', async (req, res) => {
 		const user = await prisma.user.update({
 			where: { id: userId },
 			data,
-			select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, createdAt: true },
+			select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, profilepic: true, createdAt: true },
 		})
 		return res.json({ success: true, data: user })
 	} catch (err) {
@@ -145,10 +166,17 @@ userRouter.patch('/:userId', async (req, res) => {
 export default userRouter
 
 // POST /users/register-with-player → Create user and player together and return token
-userRouter.post('/register-with-player', async (req, res) => {
+userRouter.post('/register-with-player', upload.fields([
+	{ name: 'userProfilepic', maxCount: 1 },
+	{ name: 'playerProfilepic', maxCount: 1 }
+]), async (req, res) => {
 	try {
 		const userBody = req.body.user ?? req.body
 		const playerBody = req.body.player ?? req.body
+
+
+		console.log(req.body)
+		console.log(req.file)
 
 		const { name, email, phone, dob, gender } = userBody || {}
 		const { battingStyle, bowlingStyle, state, district, subDistrict, village, pincode, playingRole } = playerBody || {}
@@ -164,13 +192,33 @@ userRouter.post('/register-with-player', async (req, res) => {
 			dobDate = parsed
 		}
 
+		// Handle image uploads
+		let userProfilepicUrl = null
+		let playerProfilepicUrl = null
+
+		if (req.files?.userProfilepic?.[0]) {
+			try {
+				userProfilepicUrl = await uploadImageBuffer(req.files.userProfilepic[0].buffer)
+			} catch (uploadErr) {
+				return res.status(500).json({ success: false, message: 'Failed to upload user profile picture' })
+			}
+		}
+
+		if (req.files?.playerProfilepic?.[0]) {
+			try {
+				playerProfilepicUrl = await uploadImageBuffer(req.files.playerProfilepic[0].buffer)
+			} catch (uploadErr) {
+				return res.status(500).json({ success: false, message: 'Failed to upload player profile picture' })
+			}
+		}
+
 		const secret = process.env.JWT_SECRET
 		if (!secret) return res.status(500).json({ success: false, message: 'Server misconfigured: JWT_SECRET missing' })
 
 		const result = await prisma.$transaction(async (tx) => {
 			const createdUser = await tx.user.create({
-				data: { name, email, phone: phone || null, dob: dobDate, gender: gender || null },
-				select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, createdAt: true },
+				data: { name, email, phone: phone || null, dob: dobDate, gender: gender || null, profilepic: userProfilepicUrl },
+				select: { id: true, name: true, email: true, phone: true, dob: true, gender: true, profilepic: true, createdAt: true },
 			})
 
 			const createdPlayer = await tx.player.create({
@@ -185,8 +233,9 @@ userRouter.post('/register-with-player', async (req, res) => {
 					village: village || null,
 					pincode: pincode || null,
 					playingRole: playingRole || null,
+					profilepic: playerProfilepicUrl,
 				},
-				select: { id: true, userId: true, name: true, battingStyle: true, bowlingStyle: true, state: true, district: true, subDistrict: true, village: true, pincode: true, playingRole: true },
+				select: { id: true, userId: true, name: true, battingStyle: true, bowlingStyle: true, state: true, district: true, subDistrict: true, village: true, pincode: true, playingRole: true, profilepic: true },
 			})
 
 			return { user: createdUser, player: createdPlayer }

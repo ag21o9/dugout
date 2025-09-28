@@ -1,4 +1,7 @@
 
+import multer from 'multer'
+import cloudinary from './cloudinary.js'
+
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Helper to upload a single image buffer to cloudinary
@@ -20,3 +23,5 @@ async function uploadImageBuffers(files) {
     }
     return urls;
 }
+
+export { upload, uploadImageBuffer, uploadImageBuffers }
