@@ -8,6 +8,86 @@ const matchRouter = express.Router()
 // Mount innings router under a match
 matchRouter.use('/:matchId/innings', inningsRouter)
 
+// GET /matches → Get all matches with optional status filter
+matchRouter.get('/', async (req, res) => {
+    try {
+        const { status, limit = 50, offset = 0 } = req.query
+        
+        // Build where clause based on status filter
+        let where = {}
+        if (status) {
+            const validStatuses = ['SCHEDULED', 'LIVE', 'COMPLETED', 'ABANDONED']
+            if (validStatuses.includes(status.toUpperCase())) {
+                where.status = status.toUpperCase()
+            } else {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Invalid status. Valid values: ${validStatuses.join(', ')}` 
+                })
+            }
+        }
+
+        const matches = await prisma.match.findMany({
+            where,
+            select: {
+                id: true,
+                tournament: { select: { id: true, name: true } },
+                teamA: { select: { id: true, name: true, logoUrl: true } },
+                teamB: { select: { id: true, name: true, logoUrl: true } },
+                matchType: true,
+                ballType: true,
+                pitchType: true,
+                city: true,
+                town: true,
+                ground: true,
+                round: true,
+                startTime: true,
+                oversLimit: true,
+                ballsPerOver: true,
+                status: true,
+                result: true,
+                winningTeam: { select: { id: true, name: true } },
+                winningMargin: true,
+                createdAt: true,
+            },
+            orderBy: [
+                { status: 'asc' }, // LIVE first, then SCHEDULED, then COMPLETED
+                { startTime: 'desc' }
+            ],
+            take: parseInt(limit),
+            skip: parseInt(offset),
+        })
+
+        // Get total count for pagination
+        const totalCount = await prisma.match.count({ where })
+
+        // Categorize matches by status
+        const categorized = {
+            live: matches.filter(m => m.status === 'LIVE'),
+            upcoming: matches.filter(m => m.status === 'SCHEDULED'),
+            completed: matches.filter(m => m.status === 'COMPLETED'),
+            abandoned: matches.filter(m => m.status === 'ABANDONED'),
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                matches,
+                categorized,
+                pagination: {
+                    total: totalCount,
+                    limit: parseInt(limit),
+                    offset: parseInt(offset),
+                    hasMore: parseInt(offset) + parseInt(limit) < totalCount
+                }
+            }
+        })
+    } catch (err) {
+        console.error(err)
+        return res.status(500).json({ success: false, message: 'Failed to fetch matches' })
+    }
+})
+
 // POST /matches → Create match (standalone or tournament fixture)
 matchRouter.post('/', requireAuth, async (req, res) => {
     try {

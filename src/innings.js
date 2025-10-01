@@ -187,14 +187,14 @@ inningsRouter.get('/live', async (req, res) => {
 
         const currentInningEnriched = state
             ? {
-                  ...current,
-                  ...state,
-                  battingTeamName: teamMap.get(current.battingTeamId)?.name || null,
-                  bowlingTeamName: teamMap.get(current.bowlingTeamId)?.name || null,
-                  strikerName: state.strikerId ? (playerMap.get(state.strikerId) || null) : null,
-                  nonStrikerName: state.nonStrikerId ? (playerMap.get(state.nonStrikerId) || null) : null,
-                  bowlerName: state.bowlerId ? (playerMap.get(state.bowlerId) || null) : null,
-              }
+                ...current,
+                ...state,
+                battingTeamName: teamMap.get(current.battingTeamId)?.name || null,
+                bowlingTeamName: teamMap.get(current.bowlingTeamId)?.name || null,
+                strikerName: state.strikerId ? (playerMap.get(state.strikerId) || null) : null,
+                nonStrikerName: state.nonStrikerId ? (playerMap.get(state.nonStrikerId) || null) : null,
+                bowlerName: state.bowlerId ? (playerMap.get(state.bowlerId) || null) : null,
+            }
             : current
 
         return res.json({
@@ -312,9 +312,90 @@ inningsRouter.get('/live-scorecard', async (req, res) => {
             select: { id: true }
         })
         if (!latest) return res.status(404).json({ success: false, message: 'No innings started for this match' })
-        // Delegate to the specific inning scorecard
-        req.params.inningId = latest.id
-        return inningsRouter.handle({ ...req, url: req.url.replace('/live-scorecard', `/${latest.id}/scorecard`), method: 'GET' }, res)
+        
+        // Get scorecard for the latest inning directly
+        const inningId = latest.id
+        const inning = await prisma.inning.findUnique({
+            where: { id: inningId },
+            select: {
+                id: true,
+                matchId: true,
+                battingTeam: { select: { id: true, name: true, logoUrl: true } },
+                bowlingTeam: { select: { id: true, name: true, logoUrl: true } },
+                match: { select: { ballsPerOver: true } },
+            },
+        })
+        if (!inning || inning.matchId !== matchId) return res.status(404).json({ success: false, message: 'Inning not found' })
+
+        const [batting, bowling] = await Promise.all([
+            prisma.battingEntry.findMany({
+                where: { inningId },
+                select: {
+                    battingOrder: true,
+                    runs: true,
+                    ballsFaced: true,
+                    fours: true,
+                    sixes: true,
+                    out: true,
+                    dismissal: true,
+                    player: { select: { id: true, name: true } },
+                },
+                orderBy: [{ battingOrder: 'asc' }],
+            }),
+            prisma.bowlingEntry.findMany({
+                where: { inningId },
+                select: {
+                    balls: true,
+                    runsConceded: true,
+                    wickets: true,
+                    maidens: true,
+                    player: { select: { id: true, name: true } },
+                },
+                orderBy: [{ runsConceded: 'asc' }, { wickets: 'desc' }],
+            }),
+        ])
+
+        const ballsPerOver = inning.match.ballsPerOver
+        const bowlingOut = bowling.map((b) => {
+            const overs = Math.floor(b.balls / ballsPerOver)
+            const balls = b.balls % ballsPerOver
+            const economy = b.balls > 0 ? (b.runsConceded * ballsPerOver) / b.balls : 0
+            return {
+                playerId: b.player.id,
+                playerName: b.player.name,
+                overs: `${overs}.${balls}`,
+                balls: b.balls,
+                runsConceded: b.runsConceded,
+                wickets: b.wickets,
+                maidens: b.maidens,
+                economy: Number(economy.toFixed(2)),
+            }
+        })
+
+        const battingOut = batting.map((bt) => ({
+            playerId: bt.player.id,
+            playerName: bt.player.name,
+            battingOrder: bt.battingOrder,
+            runs: bt.runs,
+            ballsFaced: bt.ballsFaced,
+            fours: bt.fours,
+            sixes: bt.sixes,
+            out: bt.out,
+            dismissal: bt.dismissal || null,
+            strikeRate: bt.ballsFaced > 0 ? Number(((bt.runs / bt.ballsFaced) * 100).toFixed(2)) : 0,
+        }))
+
+        return res.json({
+            success: true,
+            data: {
+                matchId,
+                inningId,
+                battingTeam: inning.battingTeam,
+                bowlingTeam: inning.bowlingTeam,
+                batting: battingOut,
+                bowling: bowlingOut,
+            },
+        })
     } catch (err) {
         console.log(err)
         return res.status(500).json({ success: false, message: 'Failed to load live scorecard' })
@@ -541,8 +622,12 @@ inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
 
         // Totals update
         let runsToAdd = runs
+        let penaltyRuns = 0;
         if (ballType === 'WIDE' || ballType === 'NO_BALL' || ballType === 'PENALTY') {
-            if (runsToAdd < 1) runsToAdd = 1 // at least 1 for extras like wide/no-ball
+                penaltyRuns=1;
+                runsToAdd = runs+penaltyRuns 
+            // }
+        
         }
 
         // Compute new oversCompleted after this ball
@@ -773,9 +858,9 @@ inningsRouter.get('/:inningId/balls', async (req, res) => {
             id: b.id,
             overNumber: b.overNumber,
             ballInOver: b.ballInOver,
-            batsmanId: b.batsmanId,
+            // batsmanId: b.batsmanId,
             batsmanName: b.batsman?.name || null,
-            bowlerId: b.bowlerId,
+            // bowlerId: b.bowlerId,
             bowlerName: b.bowler?.name || null,
             runs: b.runs,
             extras: b.extras,
@@ -786,7 +871,6 @@ inningsRouter.get('/:inningId/balls', async (req, res) => {
             isWicket: b.isWicket,
             shotType: b.shotType,
             shotRegion: b.shotRegion,
-            createdAt: b.createdAt,
         }))
         return res.json({ success: true, data: balls })
     } catch (err) {

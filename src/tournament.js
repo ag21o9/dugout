@@ -226,6 +226,7 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
                         status: true,
                         startTime: true,
                         oversLimit: true,
+                        ground: true,
                         ballsPerOver: true,
                     },
                 },
