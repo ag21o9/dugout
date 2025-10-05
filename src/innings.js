@@ -220,6 +220,8 @@ inningsRouter.get('/:inningId/scorecard', async (req, res) => {
             select: {
                 id: true,
                 matchId: true,
+                strikerId: true,
+                nonStrikerId: true,
                 battingTeam: { select: { id: true, name: true, logoUrl: true } },
                 bowlingTeam: { select: { id: true, name: true, logoUrl: true } },
                 match: { select: { ballsPerOver: true } },
@@ -283,6 +285,8 @@ inningsRouter.get('/:inningId/scorecard', async (req, res) => {
             out: bt.out,
             dismissal: bt.dismissal || null,
             strikeRate: bt.ballsFaced > 0 ? Number(((bt.runs / bt.ballsFaced) * 100).toFixed(2)) : 0,
+            isStriker: bt.player.id === inning.strikerId,
+            isNonStriker: bt.player.id === inning.nonStrikerId,
         }))
 
         return res.json({
@@ -320,6 +324,8 @@ inningsRouter.get('/live-scorecard', async (req, res) => {
             select: {
                 id: true,
                 matchId: true,
+                strikerId: true,
+                nonStrikerId: true,
                 battingTeam: { select: { id: true, name: true, logoUrl: true } },
                 bowlingTeam: { select: { id: true, name: true, logoUrl: true } },
                 match: { select: { ballsPerOver: true } },
@@ -383,6 +389,8 @@ inningsRouter.get('/live-scorecard', async (req, res) => {
             out: bt.out,
             dismissal: bt.dismissal || null,
             strikeRate: bt.ballsFaced > 0 ? Number(((bt.runs / bt.ballsFaced) * 100).toFixed(2)) : 0,
+            isStriker: bt.player.id === inning.strikerId,
+            isNonStriker: bt.player.id === inning.nonStrikerId,
         }))
 
         return res.json({
@@ -578,6 +586,234 @@ async function buildMatchState(inningId) {
     }
 }
 
+// GET /matches/:matchId/innings/match-status → Comprehensive match status for rejoining users
+inningsRouter.get('/match-status', async (req, res) => {
+    try {
+        const { matchId } = req.params
+        
+        // Get match details
+        const match = await prisma.match.findUnique({
+            where: { id: matchId },
+            select: {
+                id: true,
+                status: true,
+                ballsPerOver: true,
+                oversLimit: true,
+                teamAId: true,
+                teamBId: true,
+                teamA: { select: { id: true, name: true, logoUrl: true } },
+                teamB: { select: { id: true, name: true, logoUrl: true } },
+                result: true,
+                winningTeam: { select: { id: true, name: true } }
+            }
+        })
+        if (!match) return res.status(404).json({ success: false, message: 'Match not found' })
+
+        // Get all innings for this match
+        const innings = await prisma.inning.findMany({
+            where: { matchId },
+            select: { 
+                id: true, 
+                inningNumber: true, 
+                battingTeamId: true, 
+                bowlingTeamId: true, 
+                runs: true, 
+                wickets: true, 
+                overs: true, 
+                strikerId: true, 
+                nonStrikerId: true, 
+                currentBowlerId: true 
+            },
+            orderBy: { inningNumber: 'asc' },
+        })
+
+        if (!innings.length) {
+            return res.json({ 
+                success: true, 
+                data: { 
+                    match, 
+                    innings: [], 
+                    currentInning: null, 
+                    liveBatsmen: null,
+                    currentBowler: null,
+                    chase: null,
+                    inningsBreakdown: []
+                } 
+            })
+        }
+
+        // Get current/latest inning
+        const currentInning = innings[innings.length - 1]
+        const state = await buildMatchState(currentInning.id)
+
+        // Get live batsmen details if match is ongoing
+        let liveBatsmen = null
+        let currentBowler = null
+        
+        if (currentInning.strikerId || currentInning.nonStrikerId || currentInning.currentBowlerId) {
+            const playerIds = [currentInning.strikerId, currentInning.nonStrikerId, currentInning.currentBowlerId].filter(Boolean)
+            
+            if (playerIds.length > 0) {
+                const players = await prisma.player.findMany({
+                    where: { id: { in: playerIds } },
+                    select: { id: true, name: true, battingStyle: true, bowlingStyle: true }
+                })
+                const playerMap = new Map(players.map(p => [p.id, p]))
+
+                // Get current batting stats for live batsmen
+                const liveBattingStats = await prisma.battingEntry.findMany({
+                    where: { 
+                        inningId: currentInning.id, 
+                        playerId: { in: [currentInning.strikerId, currentInning.nonStrikerId].filter(Boolean) }
+                    },
+                    select: {
+                        playerId: true,
+                        runs: true,
+                        ballsFaced: true,
+                        fours: true,
+                        sixes: true,
+                        out: true,
+                        dismissal: true
+                    }
+                })
+                const battingMap = new Map(liveBattingStats.map(b => [b.playerId, b]))
+
+                // Get current bowling stats for current bowler
+                let bowlerStats = null
+                if (currentInning.currentBowlerId) {
+                    bowlerStats = await prisma.bowlingEntry.findFirst({
+                        where: { inningId: currentInning.id, playerId: currentInning.currentBowlerId },
+                        select: {
+                            balls: true,
+                            runsConceded: true,
+                            wickets: true,
+                            maidens: true
+                        }
+                    })
+                }
+
+                // Build live batsmen data
+                liveBatsmen = {
+                    striker: currentInning.strikerId ? {
+                        id: currentInning.strikerId,
+                        name: playerMap.get(currentInning.strikerId)?.name || null,
+                        battingStyle: playerMap.get(currentInning.strikerId)?.battingStyle || null,
+                        runs: battingMap.get(currentInning.strikerId)?.runs || 0,
+                        ballsFaced: battingMap.get(currentInning.strikerId)?.ballsFaced || 0,
+                        fours: battingMap.get(currentInning.strikerId)?.fours || 0,
+                        sixes: battingMap.get(currentInning.strikerId)?.sixes || 0,
+                        strikeRate: battingMap.get(currentInning.strikerId)?.ballsFaced > 0 ? 
+                            Number(((battingMap.get(currentInning.strikerId).runs / battingMap.get(currentInning.strikerId).ballsFaced) * 100).toFixed(2)) : 0,
+                        out: battingMap.get(currentInning.strikerId)?.out || false,
+                        dismissal: battingMap.get(currentInning.strikerId)?.dismissal || null
+                    } : null,
+                    nonStriker: currentInning.nonStrikerId ? {
+                        id: currentInning.nonStrikerId,
+                        name: playerMap.get(currentInning.nonStrikerId)?.name || null,
+                        battingStyle: playerMap.get(currentInning.nonStrikerId)?.battingStyle || null,
+                        runs: battingMap.get(currentInning.nonStrikerId)?.runs || 0,
+                        ballsFaced: battingMap.get(currentInning.nonStrikerId)?.ballsFaced || 0,
+                        fours: battingMap.get(currentInning.nonStrikerId)?.fours || 0,
+                        sixes: battingMap.get(currentInning.nonStrikerId)?.sixes || 0,
+                        strikeRate: battingMap.get(currentInning.nonStrikerId)?.ballsFaced > 0 ? 
+                            Number(((battingMap.get(currentInning.nonStrikerId).runs / battingMap.get(currentInning.nonStrikerId).ballsFaced) * 100).toFixed(2)) : 0,
+                        out: battingMap.get(currentInning.nonStrikerId)?.out || false,
+                        dismissal: battingMap.get(currentInning.nonStrikerId)?.dismissal || null
+                    } : null
+                }
+
+                // Build current bowler data
+                if (currentInning.currentBowlerId && bowlerStats) {
+                    const overs = Math.floor(bowlerStats.balls / match.ballsPerOver)
+                    const balls = bowlerStats.balls % match.ballsPerOver
+                    const economy = bowlerStats.balls > 0 ? (bowlerStats.runsConceded * match.ballsPerOver) / bowlerStats.balls : 0
+                    
+                    currentBowler = {
+                        id: currentInning.currentBowlerId,
+                        name: playerMap.get(currentInning.currentBowlerId)?.name || null,
+                        bowlingStyle: playerMap.get(currentInning.currentBowlerId)?.bowlingStyle || null,
+                        overs: `${overs}.${balls}`,
+                        balls: bowlerStats.balls,
+                        runsConceded: bowlerStats.runsConceded,
+                        wickets: bowlerStats.wickets,
+                        maidens: bowlerStats.maidens,
+                        economy: Number(economy.toFixed(2))
+                    }
+                }
+            }
+        }
+
+        // Build chase information if it's 2nd+ innings
+        let chase = null
+        if (innings.length > 1) {
+            const prevMax = Math.max(...innings.slice(0, -1).map((i) => i.runs))
+            const target = prevMax + 1
+            const legalBalls = await prisma.ball.count({ 
+                where: { inningId: currentInning.id, ballType: { in: ['NORMAL', 'FREE_HIT', 'BYE', 'LEG_BYE'] } } 
+            })
+            const ballsLimit = match.oversLimit * match.ballsPerOver
+            const ballsLeft = Math.max(0, ballsLimit - legalBalls)
+            const needed = Math.max(0, target - currentInning.runs)
+            const currentRunRate = legalBalls > 0 ? (currentInning.runs * match.ballsPerOver) / legalBalls : 0
+            const requiredRunRate = ballsLeft > 0 ? (needed * match.ballsPerOver) / ballsLeft : 0
+            
+            chase = {
+                target,
+                needed,
+                ballsLeft,
+                wicketsLeft: Math.max(0, 10 - currentInning.wickets),
+                currentRunRate: Number(currentRunRate.toFixed(2)),
+                requiredRunRate: Number(requiredRunRate.toFixed(2)),
+            }
+        }
+
+        // Build team mapping for innings breakdown
+        const teamMap = new Map([
+            [match.teamAId, match.teamA],
+            [match.teamBId, match.teamB],
+        ])
+
+        // Build innings breakdown with team names
+        const inningsBreakdown = innings.map(inn => ({
+            inningNumber: inn.inningNumber,
+            battingTeam: teamMap.get(inn.battingTeamId),
+            bowlingTeam: teamMap.get(inn.bowlingTeamId),
+            runs: inn.runs,
+            wickets: inn.wickets,
+            overs: inn.overs,
+            isComplete: inn.id !== currentInning.id, // All innings except current are complete
+        }))
+
+        // Enhanced current inning with state
+        const currentInningEnriched = state ? {
+            ...currentInning,
+            ...state,
+            battingTeam: teamMap.get(currentInning.battingTeamId),
+            bowlingTeam: teamMap.get(currentInning.bowlingTeamId),
+        } : {
+            ...currentInning,
+            battingTeam: teamMap.get(currentInning.battingTeamId),
+            bowlingTeam: teamMap.get(currentInning.bowlingTeamId),
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                match,
+                innings: inningsBreakdown,
+                currentInning: currentInningEnriched,
+                liveBatsmen,
+                currentBowler,
+                chase,
+                lastUpdated: new Date().toISOString()
+            }
+        })
+    } catch (err) {
+        console.log(err)
+        return res.status(500).json({ success: false, message: 'Failed to get match status' })
+    }
+})
+
 // POST /matches/:matchId/innings/:inningId/balls → Record a ball
 inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
     try {
@@ -772,6 +1008,75 @@ inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
             })
         }
 
+        // Get updated scorecard data after the ball is recorded
+        const [battingStats, bowlingStats, inningDetails] = await Promise.all([
+            prisma.battingEntry.findMany({
+                where: { inningId },
+                select: {
+                    battingOrder: true,
+                    runs: true,
+                    ballsFaced: true,
+                    fours: true,
+                    sixes: true,
+                    out: true,
+                    dismissal: true,
+                    player: { select: { id: true, name: true } },
+                },
+                orderBy: [{ battingOrder: 'asc' }],
+            }),
+            prisma.bowlingEntry.findMany({
+                where: { inningId },
+                select: {
+                    balls: true,
+                    runsConceded: true,
+                    wickets: true,
+                    maidens: true,
+                    player: { select: { id: true, name: true } },
+                },
+                orderBy: [{ runsConceded: 'asc' }, { wickets: 'desc' }],
+            }),
+            prisma.inning.findUnique({
+                where: { id: inningId },
+                select: {
+                    battingTeam: { select: { id: true, name: true, logoUrl: true } },
+                    bowlingTeam: { select: { id: true, name: true, logoUrl: true } },
+                    match: { select: { ballsPerOver: true } },
+                },
+            }),
+        ])
+
+        const ballsPerOver = inningDetails.match.ballsPerOver
+        const bowlingOut = bowlingStats.map((b) => {
+            const overs = Math.floor(b.balls / ballsPerOver)
+            const balls = b.balls % ballsPerOver
+            const economy = b.balls > 0 ? (b.runsConceded * ballsPerOver) / b.balls : 0
+            return {
+                playerId: b.player.id,
+                playerName: b.player.name,
+                overs: `${overs}.${balls}`,
+                balls: b.balls,
+                runsConceded: b.runsConceded,
+                wickets: b.wickets,
+                maidens: b.maidens,
+                economy: Number(economy.toFixed(2)),
+            }
+        })
+
+        const battingOut = battingStats.map((bt) => ({
+            playerId: bt.player.id,
+            playerName: bt.player.name,
+            battingOrder: bt.battingOrder,
+            runs: bt.runs,
+            ballsFaced: bt.ballsFaced,
+            fours: bt.fours,
+            sixes: bt.sixes,
+            out: bt.out,
+            dismissal: bt.dismissal || null,
+            strikeRate: bt.ballsFaced > 0 ? Number(((bt.runs / bt.ballsFaced) * 100).toFixed(2)) : 0,
+            isStriker: bt.player.id === updatedInning.strikerId,
+            isNonStriker: bt.player.id === updatedInning.nonStrikerId,
+        }))
+
         // If inning ended, respond accordingly
         const state = await buildMatchState(inningId)
         // Replace IDs with names in state and set runs to this ball's addition
@@ -813,6 +1118,14 @@ inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
                 isSixByBatsman,
                 isWicket,
                 wicketKind: wicket?.kind || null,
+                scorecard: {
+                    matchId,
+                    inningId,
+                    battingTeam: inningDetails.battingTeam,
+                    bowlingTeam: inningDetails.bowlingTeam,
+                    batting: battingOut,
+                    bowling: bowlingOut,
+                }
             }
         })
     } catch (err) {
