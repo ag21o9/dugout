@@ -6,6 +6,193 @@ import { upload, uploadImageBuffer } from '../config/utils.js'
 
 const playersRouter = express.Router()
 
+async function buildPlayerProfile(playerId) {
+  const player = await prisma.player.findUnique({
+    where: { id: playerId },
+    select: {
+      id: true,
+      name: true,
+      battingStyle: true,
+      bowlingStyle: true,
+      state: true,
+      district: true,
+      subDistrict: true,
+      village: true,
+      pincode: true,
+      playingRole: true,
+      profilepic: true,
+      totalRuns: true,
+      totalWickets: true,
+      user: { select: { id: true, name: true, email: true, phone: true } },
+    },
+  })
+  if (!player) return null
+
+  const [battingAgg, bestBatInning, bowlingAgg, bestBowlingEntry, battingMatchIds, bowlingMatchIds] = await Promise.all([
+    prisma.battingEntry.aggregate({
+      where: { playerId },
+      _sum: { runs: true, ballsFaced: true, fours: true, sixes: true },
+      _max: { runs: true },
+    }),
+    prisma.battingEntry.findFirst({
+      where: { playerId },
+      orderBy: [
+        { runs: 'desc' },
+        { ballsFaced: 'asc' },
+        { battingOrder: 'asc' },
+      ],
+      select: {
+        inningId: true,
+        runs: true,
+        ballsFaced: true,
+        fours: true,
+        sixes: true,
+        inning: {
+          select: {
+            id: true,
+            inningNumber: true,
+            battingTeam: { select: { id: true, name: true } },
+            bowlingTeam: { select: { id: true, name: true } },
+            match: {
+              select: {
+                id: true,
+                teamA: { select: { id: true, name: true } },
+                teamB: { select: { id: true, name: true } },
+              },
+            },
+          },
+        },
+      },
+    }),
+    prisma.bowlingEntry.aggregate({
+      where: { playerId },
+      _sum: { wickets: true, balls: true, runsConceded: true, maidens: true },
+      _max: { wickets: true },
+    }),
+    prisma.bowlingEntry.findFirst({
+      where: { playerId },
+      orderBy: [
+        { wickets: 'desc' },
+        { runsConceded: 'asc' },
+        { balls: 'asc' },
+      ],
+      select: {
+        inningId: true,
+        wickets: true,
+        runsConceded: true,
+        balls: true,
+        maidens: true,
+        inning: {
+          select: {
+            id: true,
+            inningNumber: true,
+            battingTeam: { select: { id: true, name: true } },
+            bowlingTeam: { select: { id: true, name: true } },
+            match: {
+              select: {
+                id: true,
+                teamA: { select: { id: true, name: true } },
+                teamB: { select: { id: true, name: true } },
+              },
+            },
+          },
+        },
+      },
+    }),
+    prisma.battingEntry.findMany({
+      where: { playerId },
+      distinct: ['inningId'],
+      select: { inning: { select: { matchId: true } } },
+    }),
+    prisma.bowlingEntry.findMany({
+      where: { playerId },
+      distinct: ['inningId'],
+      select: { inning: { select: { matchId: true } } },
+    }),
+  ])
+
+  const battingSum = battingAgg?._sum || {}
+  const bowlingSum = bowlingAgg?._sum || {}
+
+  const totalRuns = battingSum.runs ?? 0
+  const ballsFaced = battingSum.ballsFaced ?? 0
+  const totalFours = battingSum.fours ?? 0
+  const totalSixes = battingSum.sixes ?? 0
+  const strikeRate = ballsFaced > 0 ? Number(((totalRuns / ballsFaced) * 100).toFixed(2)) : 0
+
+  const totalWickets = bowlingSum.wickets ?? 0
+  const ballsBowled = bowlingSum.balls ?? 0
+  const oversBowled = ballsBowled > 0 ? `${Math.floor(ballsBowled / 6)}.${ballsBowled % 6}` : '0.0'
+  const runsConceded = bowlingSum.runsConceded ?? 0
+  const economy = ballsBowled > 0 ? Number(((runsConceded * 6) / ballsBowled).toFixed(2)) : 0
+  const maidens = bowlingSum.maidens ?? 0
+
+  const bestBatting = bestBatInning
+    ? {
+        inningId: bestBatInning.inningId,
+        runs: bestBatInning.runs,
+        ballsFaced: bestBatInning.ballsFaced,
+        fours: bestBatInning.fours,
+        sixes: bestBatInning.sixes,
+        matchId: bestBatInning.inning?.match?.id || null,
+        inningNumber: bestBatInning.inning?.inningNumber || null,
+        battingTeam: bestBatInning.inning?.battingTeam?.name || null,
+        bowlingTeam: bestBatInning.inning?.bowlingTeam?.name || null,
+      }
+    : null
+
+  const bestBowling = bestBowlingEntry
+    ? {
+        inningId: bestBowlingEntry.inningId,
+        wickets: bestBowlingEntry.wickets,
+        runsConceded: bestBowlingEntry.runsConceded,
+        balls: bestBowlingEntry.balls,
+        maidens: bestBowlingEntry.maidens,
+        overs: bestBowlingEntry.balls > 0
+          ? `${Math.floor(bestBowlingEntry.balls / 6)}.${bestBowlingEntry.balls % 6}`
+          : '0.0',
+        matchId: bestBowlingEntry.inning?.match?.id || null,
+        inningNumber: bestBowlingEntry.inning?.inningNumber || null,
+        battingTeam: bestBowlingEntry.inning?.battingTeam?.name || null,
+        bowlingTeam: bestBowlingEntry.inning?.bowlingTeam?.name || null,
+      }
+    : null
+
+  const matchIdSet = new Set([
+    ...battingMatchIds.map((m) => m.inning?.matchId).filter(Boolean),
+    ...bowlingMatchIds.map((m) => m.inning?.matchId).filter(Boolean),
+  ])
+
+  return {
+    ...player,
+    stats: {
+      matchesPlayed: matchIdSet.size,
+      batting: {
+        totalRuns,
+        ballsFaced,
+        strikeRate,
+        fours: totalFours,
+        sixes: totalSixes,
+        highestRuns: battingAgg?._max?.runs ?? 0,
+        highestInning: bestBatting,
+      },
+      bowling: {
+        totalWickets,
+        ballsBowled,
+        oversBowled,
+        runsConceded,
+        maidens,
+        economy,
+        bestBowling,
+      },
+      aggregates: {
+        recordedTotalRuns: player.totalRuns,
+        recordedTotalWickets: player.totalWickets,
+      },
+    },
+  }
+}
+
 // POST /players → Create a player for a user
 playersRouter.post('/', requireAuth, upload.single('profilepic'), async (req, res) => {
   try {
@@ -54,30 +241,38 @@ playersRouter.post('/', requireAuth, upload.single('profilepic'), async (req, re
   }
 })
 
+// GET /players/myprofile → Authenticated player's profile with stats
+playersRouter.get('/myprofile', requireAuth, async (req, res) => {
+  try {
+    const player = await prisma.player.findFirst({
+      where: { userId: req.user.id },
+      select: { id: true },
+    })
+    if (!player) {
+      return res.status(404).json({ success: false, message: 'No player profile found for user' })
+    }
+
+    const profile = await buildPlayerProfile(player.id)
+    if (!profile) {
+      return res.status(404).json({ success: false, message: 'Player not found' })
+    }
+    return res.json({ success: true, data: profile })
+  } catch (err) {
+    console.log(err)
+    return res.status(500).json({ success: false, message: 'Failed to fetch profile' })
+  }
+})
+
 // GET /players/:playerId → Get player profile
 playersRouter.get('/:playerId', async (req, res) => {
   try {
     const { playerId } = req.params
-    const player = await prisma.player.findUnique({
-      where: { id: playerId },
-      select: {
-        id: true,
-        name: true,
-        battingStyle: true,
-        bowlingStyle: true,
-        state: true,
-        district: true,
-        subDistrict: true,
-        village: true,
-        pincode: true,
-        playingRole: true,
-        profilepic: true,
-        user: { select: { id: true, name: true, email: true, phone: true } },
-      },
-    })
-    if (!player) return res.status(404).json({ success: false, message: 'Player not found' })
-    return res.json({ success: true, data: player })
+    const profile = await buildPlayerProfile(playerId)
+    if (!profile) return res.status(404).json({ success: false, message: 'Player not found' })
+
+    return res.json({ success: true, data: profile })
   } catch (err) {
+    console.log(err)
     return res.status(500).json({ success: false, message: 'Failed to fetch player' })
   }
 })

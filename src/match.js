@@ -201,10 +201,21 @@ matchRouter.post('/:matchId/start', requireAuth, async (req, res) => {
 matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
     try {
         const { matchId } = req.params
-        const { winningTeamId, winningMargin, result } = req.body || {}
+
         const match = await prisma.match.findUnique({
             where: { id: matchId },
-            select: { id: true, status: true, teamAId: true, teamBId: true, statsApplied: true, tournament: { select: { organiser: true } } },
+            select: {
+                id: true,
+                status: true,
+                teamAId: true,
+                teamBId: true,
+                statsApplied: true,
+                ballsPerOver: true,
+                oversLimit: true,
+                tournament: { select: { organiser: true } },
+                teamA: { select: { id: true, name: true } },
+                teamB: { select: { id: true, name: true } },
+            },
         })
         if (!match) return res.status(404).json({ success: false, message: 'Match not found' })
         if (match.tournament?.organiser && match.tournament.organiser !== req.user.id) {
@@ -213,24 +224,92 @@ matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
         if (!['SCHEDULED', 'LIVE'].includes(match.status)) {
             return res.status(400).json({ success: false, message: 'Match already ended or invalid state' })
         }
-        if (winningTeamId && ![match.teamAId, match.teamBId].includes(winningTeamId)) {
-            return res.status(400).json({ success: false, message: 'winningTeamId must be one of the match teams' })
+
+        const innings = await prisma.inning.findMany({
+            where: { matchId },
+            select: {
+                id: true,
+                inningNumber: true,
+                runs: true,
+                wickets: true,
+                battingTeamId: true,
+                bowlingTeamId: true,
+                battingTeam: { select: { id: true, name: true } },
+            },
+            orderBy: { inningNumber: 'asc' },
+        })
+
+        if (innings.length < 2) {
+            return res.status(400).json({ success: false, message: 'Cannot end match: second innings not completed' })
         }
+
+        const relevantInnings = innings.slice(-2)
+        const firstInning = relevantInnings[0]
+        const secondInning = relevantInnings[1]
+        const inningIds = innings.map((i) => i.id)
+
+        const ballsPerOver = match.ballsPerOver || 6
+        const oversLimit = match.oversLimit || 0
+        const ballsLimit = oversLimit > 0 ? oversLimit * ballsPerOver : null
+
+        const legalBallsSecond = await prisma.ball.count({
+            where: {
+                inningId: secondInning.id,
+                ballType: { in: ['NORMAL', 'FREE_HIT', 'BYE', 'LEG_BYE'] },
+            },
+        })
+
+        const target = firstInning.runs + 1
+        const chaseAchieved = secondInning.runs >= target
+        const allBallsUsed = ballsLimit != null ? legalBallsSecond >= ballsLimit : false
+        const wicketsAllOut = secondInning.wickets >= 10
+        const scoresLevel = secondInning.runs === firstInning.runs
+
+        if (!chaseAchieved && !wicketsAllOut && !allBallsUsed) {
+            return res.status(400).json({ success: false, message: 'Second innings still in progress' })
+        }
+        if (scoresLevel && !wicketsAllOut && !allBallsUsed) {
+            return res.status(400).json({ success: false, message: 'Second innings still in progress' })
+        }
+
+        let winningTeamId = null
+        let winningTeamName = null
+        let winningMargin = null
+        let result = null
+
+        if (secondInning.runs > firstInning.runs) {
+            winningTeamId = secondInning.battingTeamId
+            winningTeamName = secondInning.battingTeam?.name || (winningTeamId === match.teamAId ? match.teamA?.name : match.teamB?.name) || null
+            const wicketsLeftRaw = Math.max(0, 10 - secondInning.wickets)
+            const wicketsLeft = Math.max(1, wicketsLeftRaw)
+            winningMargin = `${wicketsLeft} wicket${wicketsLeft === 1 ? '' : 's'}`
+            result = `${winningTeamName || 'Unknown team'} won by ${winningMargin}`
+        } else if (secondInning.runs < firstInning.runs) {
+            winningTeamId = firstInning.battingTeamId
+            winningTeamName = firstInning.battingTeam?.name || (winningTeamId === match.teamAId ? match.teamA?.name : match.teamB?.name) || null
+            const runMargin = firstInning.runs - secondInning.runs
+            winningMargin = `${runMargin} run${runMargin === 1 ? '' : 's'}`
+            result = `${winningTeamName || 'Unknown team'} won by ${winningMargin}`
+        } else {
+            winningMargin = 'Tie'
+            result = 'Match tied'
+            winningTeamId = null
+            winningTeamName = null
+        }
+
         // Pre-aggregate lifetime stats from this match
         let playerAgg = new Map()
         if (!match.statsApplied) {
-            const inningIds = await prisma.inning.findMany({ where: { matchId }, select: { id: true } })
-            const ids = inningIds.map((i) => i.id)
             const [batSums, bowlSums] = await Promise.all([
                 prisma.battingEntry.groupBy({
                     by: ['playerId'],
                     _sum: { runs: true },
-                    where: { inningId: { in: ids } },
+                    where: { inningId: { in: inningIds } },
                 }),
                 prisma.bowlingEntry.groupBy({
                     by: ['playerId'],
                     _sum: { wickets: true },
-                    where: { inningId: { in: ids } },
+                    where: { inningId: { in: inningIds } },
                 }),
             ])
             for (const row of batSums) {
@@ -251,7 +330,15 @@ matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
                 if (vals.runs) incData.totalRuns = vals.runs
                 if (vals.wickets) incData.totalWickets = vals.wickets
                 if (Object.keys(incData).length) {
-                    tx.push(prisma.player.update({ where: { id: playerId }, data: { totalRuns: { increment: incData.totalRuns || 0 }, totalWickets: { increment: incData.totalWickets || 0 } } }))
+                    tx.push(
+                        prisma.player.update({
+                            where: { id: playerId },
+                            data: {
+                                totalRuns: { increment: incData.totalRuns || 0 },
+                                totalWickets: { increment: incData.totalWickets || 0 },
+                            },
+                        })
+                    )
                 }
             }
         }
@@ -262,17 +349,25 @@ matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
                 data: {
                     status: 'COMPLETED',
                     winningTeamId: winningTeamId || null,
-                    winningMargin: winningMargin || null,
-                    result: result || null,
+                    winningMargin: winningMargin,
+                    result: result,
                     statsApplied: true,
                 },
-                select: { id: true, status: true, winningTeamId: true, winningMargin: true, result: true, statsApplied: true },
+                select: {
+                    id: true,
+                    status: true,
+                    winningTeamId: true,
+                    winningMargin: true,
+                    result: true,
+                    statsApplied: true,
+                    winningTeam: { select: { id: true, name: true } },
+                },
             })
         )
 
         const results = await prisma.$transaction(tx)
         const updated = results[results.length - 1]
-        return res.json({ success: true, data: updated })
+        return res.json({ success: true, data: { ...updated, winningTeamName } })
     } catch (err) {
         return res.status(500).json({ success: false, message: 'Failed to end match' })
     }
