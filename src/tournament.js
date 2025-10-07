@@ -235,12 +235,39 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
                         oversLimit: true,
                         ground: true,
                         ballsPerOver: true,
+                        innings: {
+                            select: { id: true, inningNumber: true },
+                            orderBy: { inningNumber: 'asc' },
+                        },
                     },
                 },
             },
         })
         if (!tournament) return res.status(404).json({ success: false, message: 'Tournament not found' })
-        return res.json({ success: true, data: tournament })
+        const { matches = [], ...rest } = tournament
+
+        const processedMatches = matches.map(({ innings = [], ...matchData }) => {
+            const sortedInnings = [...innings].sort((a, b) => (a.inningNumber ?? 0) - (b.inningNumber ?? 0))
+            const lastInning = sortedInnings[sortedInnings.length - 1] || null
+            const inningsStarted = sortedInnings.length > 0
+            const lastInningNumber = lastInning?.inningNumber ?? null
+            let lastInningPhase = null
+            if (lastInningNumber != null) {
+                if (lastInningNumber === 1) lastInningPhase = 'FIRST'
+                else if (lastInningNumber === 2) lastInningPhase = 'SECOND'
+                else lastInningPhase = `INNING_${lastInningNumber}`
+            }
+
+            return {
+                ...matchData,
+                inningsStarted,
+                lastInningId: lastInning?.id || null,
+                lastInningNumber,
+                lastInningPhase,
+            }
+        })
+
+        return res.json({ success: true, data: { ...rest, matches: processedMatches } })
     } catch (err) {
         console.log(err)
         return res.status(500).json({ success: false, message: 'Failed to fetch tournament' })

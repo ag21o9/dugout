@@ -469,17 +469,26 @@ inningsRouter.get('/getbatteam', requireAuth, async (req, res) => {
         })
         if (!latestInning) return res.status(404).json({ success: false, message: 'No innings started for this match' })
 
+        const battedPlayers = await prisma.battingEntry.findMany({
+            where: { inning: { matchId } },
+            select: { playerId: true },
+            distinct: ['playerId']
+        })
+        const alreadyBattedIds = new Set(battedPlayers.map((bp) => bp.playerId))
+
         const members = await prisma.teamMembership.findMany({
             where: { teamId: latestInning.battingTeamId },
             select: { player: { select: { id: true, name: true, battingStyle: true, bowlingStyle: true } } }
         })
 
-        const players = members.map(m => ({
-            id: m.player.id,
-            name: m.player.name,
-            battingType: m.player.battingStyle || null,
-            bowlingType: m.player.bowlingStyle || null,
-        }))
+        const players = members
+            .filter((m) => !alreadyBattedIds.has(m.player.id))
+            .map(m => ({
+                id: m.player.id,
+                name: m.player.name,
+                battingType: m.player.battingStyle || null,
+                bowlingType: m.player.bowlingStyle || null,
+            }))
 
         return res.json({ success: true, data: { teamId: latestInning.battingTeamId, players } })
     } catch (err) {
