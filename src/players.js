@@ -263,6 +263,146 @@ playersRouter.get('/myprofile', requireAuth, async (req, res) => {
   }
 })
 
+// PATCH /players/myprofile → Update authenticated player's profile
+playersRouter.patch('/myprofile', requireAuth, async (req, res) => {
+  try {
+    const {
+      name,
+      gender,
+      battingStyle,
+      bowlingStyle,
+      state,
+      district,
+      subDistrict,
+      village,
+      pincode,
+      playingRole,
+    } = req.body || {}
+
+    const provided = [
+      name,
+      gender,
+      battingStyle,
+      bowlingStyle,
+      state,
+      district,
+      subDistrict,
+      village,
+      pincode,
+      playingRole,
+    ].some((val) => val !== undefined)
+
+    if (!provided) {
+      return res.status(400).json({ success: false, message: 'No fields to update' })
+    }
+
+    const player = await prisma.player.findFirst({
+      where: { userId: req.user.id },
+      select: { id: true, userId: true },
+    })
+
+    if (!player) {
+      return res.status(404).json({ success: false, message: 'No player profile found for user' })
+    }
+
+    const toNull = (value) => (value === '' ? null : value)
+
+    const userData = {}
+    if (name !== undefined) userData.name = toNull(name)
+    if (gender !== undefined) userData.gender = toNull(gender)
+
+    const playerData = {}
+    if (name !== undefined) playerData.name = toNull(name)
+    if (battingStyle !== undefined) playerData.battingStyle = toNull(battingStyle)
+    if (bowlingStyle !== undefined) playerData.bowlingStyle = toNull(bowlingStyle)
+    if (state !== undefined) playerData.state = toNull(state)
+    if (district !== undefined) playerData.district = toNull(district)
+    if (subDistrict !== undefined) playerData.subDistrict = toNull(subDistrict)
+    if (village !== undefined) playerData.village = toNull(village)
+    if (pincode !== undefined) playerData.pincode = toNull(pincode)
+    if (playingRole !== undefined) playerData.playingRole = toNull(playingRole)
+
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedUser = Object.keys(userData).length
+        ? await tx.user.update({
+            where: { id: player.userId },
+            data: userData,
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+              dob: true,
+              gender: true,
+              profilepic: true,
+            },
+          })
+        : await tx.user.findUnique({
+            where: { id: player.userId },
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+              dob: true,
+              gender: true,
+              profilepic: true,
+            },
+          })
+
+      const updatedPlayer = Object.keys(playerData).length
+        ? await tx.player.update({
+            where: { id: player.id },
+            data: playerData,
+            select: {
+              id: true,
+              userId: true,
+              name: true,
+              battingStyle: true,
+              bowlingStyle: true,
+              state: true,
+              district: true,
+              subDistrict: true,
+              village: true,
+              pincode: true,
+              playingRole: true,
+              profilepic: true,
+            },
+          })
+    : await tx.player.findUnique({
+      where: { id: player.id },
+            select: {
+              id: true,
+              userId: true,
+              name: true,
+              battingStyle: true,
+              bowlingStyle: true,
+              state: true,
+              district: true,
+              subDistrict: true,
+              village: true,
+              pincode: true,
+              playingRole: true,
+              profilepic: true,
+            },
+          })
+
+      return { user: updatedUser, player: updatedPlayer }
+    })
+
+    return res.json({ success: true, data: result })
+  } catch (err) {
+    console.log(err)
+    if (err?.code === 'P2001') {
+      return res.status(404).json({ success: false, message: 'Player not found' })
+    }
+    if (err?.code === 'P2002' && err?.meta?.target?.includes('email')) {
+      return res.status(409).json({ success: false, message: 'Email already in use' })
+    }
+    return res.status(500).json({ success: false, message: 'Failed to update player' })
+  }
+})
+
 // GET /players/:playerId → Get player profile
 playersRouter.get('/:playerId', async (req, res) => {
   try {

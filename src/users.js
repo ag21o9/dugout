@@ -13,7 +13,7 @@ userRouter.post('/login/request-otp', async (req, res) => {
 
 		let user = await prisma.user.findFirst({ where: { phone } })
 		if (!user) {
-			res.status(201).send({status:201, message:"user not found"})
+			res.status(201).send({ status: 201, message: "user not found" })
 			// user = await prisma.user.create({
 			// 	data: { phone, name: 'User', email: `${phone}@placeholder.local` },
 			// 	select: { id: true, phone: true },
@@ -52,7 +52,7 @@ userRouter.post('/login/verify-otp', async (req, res) => {
 // POST /users → Create a user
 userRouter.post('/', upload.single('profilepic'), async (req, res) => {
 	try {
-	const { name, email, phone, dob, gender } = req.body || {}
+		const { name, email, phone, dob, gender } = req.body || {}
 
 		if (!name || !email) {
 			return res.status(400).json({ success: false, message: 'name and email are required' })
@@ -116,7 +116,7 @@ userRouter.get('/:userId', async (req, res) => {
 userRouter.patch('/:userId', upload.single('profilepic'), async (req, res) => {
 	try {
 		const { userId } = req.params
-	const { name, email, phone, dob, gender } = req.body || {}
+		const { name, email, phone, dob, gender } = req.body || {}
 
 		const data = {}
 		if (name !== undefined) data.name = name

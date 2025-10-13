@@ -77,8 +77,11 @@ teamsRouter.post('/:teamId/members', requireAuth, async (req, res) => {
     }
 
     // validate team exists
-    const team = await prisma.team.findUnique({ where: { id: teamId }, select: { id: true } })
+    const team = await prisma.team.findUnique({ where: { id: teamId }, select: { id: true, ownerId: true } })
     if (!team) return res.status(404).json({ success: false, message: 'Team not found' })
+    if (team.ownerId !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Only the team owner can add members' })
+    }
 
     // create memberships (ignore duplicates using unique constraint if any later)
     const created = await prisma.$transaction(
