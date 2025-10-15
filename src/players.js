@@ -23,7 +23,7 @@ async function buildPlayerProfile(playerId) {
       profilepic: true,
       totalRuns: true,
       totalWickets: true,
-      user: { select: { id: true, name: true, email: true, phone: true } },
+      user: { select: { id: true, name: true, email: true, phone: true, gender: true, dob: true } },
     },
   })
   if (!player) return null
@@ -129,33 +129,33 @@ async function buildPlayerProfile(playerId) {
 
   const bestBatting = bestBatInning
     ? {
-        inningId: bestBatInning.inningId,
-        runs: bestBatInning.runs,
-        ballsFaced: bestBatInning.ballsFaced,
-        fours: bestBatInning.fours,
-        sixes: bestBatInning.sixes,
-        matchId: bestBatInning.inning?.match?.id || null,
-        inningNumber: bestBatInning.inning?.inningNumber || null,
-        battingTeam: bestBatInning.inning?.battingTeam?.name || null,
-        bowlingTeam: bestBatInning.inning?.bowlingTeam?.name || null,
-      }
+      inningId: bestBatInning.inningId,
+      runs: bestBatInning.runs,
+      ballsFaced: bestBatInning.ballsFaced,
+      fours: bestBatInning.fours,
+      sixes: bestBatInning.sixes,
+      matchId: bestBatInning.inning?.match?.id || null,
+      inningNumber: bestBatInning.inning?.inningNumber || null,
+      battingTeam: bestBatInning.inning?.battingTeam?.name || null,
+      bowlingTeam: bestBatInning.inning?.bowlingTeam?.name || null,
+    }
     : null
 
   const bestBowling = bestBowlingEntry
     ? {
-        inningId: bestBowlingEntry.inningId,
-        wickets: bestBowlingEntry.wickets,
-        runsConceded: bestBowlingEntry.runsConceded,
-        balls: bestBowlingEntry.balls,
-        maidens: bestBowlingEntry.maidens,
-        overs: bestBowlingEntry.balls > 0
-          ? `${Math.floor(bestBowlingEntry.balls / 6)}.${bestBowlingEntry.balls % 6}`
-          : '0.0',
-        matchId: bestBowlingEntry.inning?.match?.id || null,
-        inningNumber: bestBowlingEntry.inning?.inningNumber || null,
-        battingTeam: bestBowlingEntry.inning?.battingTeam?.name || null,
-        bowlingTeam: bestBowlingEntry.inning?.bowlingTeam?.name || null,
-      }
+      inningId: bestBowlingEntry.inningId,
+      wickets: bestBowlingEntry.wickets,
+      runsConceded: bestBowlingEntry.runsConceded,
+      balls: bestBowlingEntry.balls,
+      maidens: bestBowlingEntry.maidens,
+      overs: bestBowlingEntry.balls > 0
+        ? `${Math.floor(bestBowlingEntry.balls / 6)}.${bestBowlingEntry.balls % 6}`
+        : '0.0',
+      matchId: bestBowlingEntry.inning?.match?.id || null,
+      inningNumber: bestBowlingEntry.inning?.inningNumber || null,
+      battingTeam: bestBowlingEntry.inning?.battingTeam?.name || null,
+      bowlingTeam: bestBowlingEntry.inning?.bowlingTeam?.name || null,
+    }
     : null
 
   const matchIdSet = new Set([
@@ -199,9 +199,9 @@ playersRouter.post('/', requireAuth, upload.single('profilepic'), async (req, re
     const { battingStyle, bowlingStyle, state, district, subDistrict, village, pincode, playingRole } = req.body || {}
 
     const user = await prisma.user.findUnique({
-        where : {
-            id : req.user.id
-        }
+      where: {
+        id: req.user.id
+      }
     });
     // Handle profile picture upload if provided
     let profilepicUrl = null
@@ -216,7 +216,7 @@ playersRouter.post('/', requireAuth, upload.single('profilepic'), async (req, re
     const player = await prisma.player.create({
       data: {
         userId: req.user.id,
-        name : user.name,
+        name: user.name,
         battingStyle: battingStyle || null,
         bowlingStyle: bowlingStyle || null,
         state: state || null,
@@ -233,7 +233,7 @@ playersRouter.post('/', requireAuth, upload.single('profilepic'), async (req, re
     const secret = process.env.JWT_SECRET
 
     const token = jwt.sign({ sub: player.userId }, secret, { expiresIn: '7d' })
-        // return res.json({ success: true, token, user })
+    // return res.json({ success: true, token, user })
     return res.status(201).json({ success: true, user: player, token })
   } catch (err) {
     console.log(err)
@@ -325,67 +325,67 @@ playersRouter.patch('/myprofile', requireAuth, async (req, res) => {
     const result = await prisma.$transaction(async (tx) => {
       const updatedUser = Object.keys(userData).length
         ? await tx.user.update({
-            where: { id: player.userId },
-            data: userData,
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-              dob: true,
-              gender: true,
-              profilepic: true,
-            },
-          })
+          where: { id: player.userId },
+          data: userData,
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            dob: true,
+            gender: true,
+            profilepic: true,
+          },
+        })
         : await tx.user.findUnique({
-            where: { id: player.userId },
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-              dob: true,
-              gender: true,
-              profilepic: true,
-            },
-          })
+          where: { id: player.userId },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            dob: true,
+            gender: true,
+            profilepic: true,
+          },
+        })
 
       const updatedPlayer = Object.keys(playerData).length
         ? await tx.player.update({
-            where: { id: player.id },
-            data: playerData,
-            select: {
-              id: true,
-              userId: true,
-              name: true,
-              battingStyle: true,
-              bowlingStyle: true,
-              state: true,
-              district: true,
-              subDistrict: true,
-              village: true,
-              pincode: true,
-              playingRole: true,
-              profilepic: true,
-            },
-          })
-    : await tx.player.findUnique({
-      where: { id: player.id },
-            select: {
-              id: true,
-              userId: true,
-              name: true,
-              battingStyle: true,
-              bowlingStyle: true,
-              state: true,
-              district: true,
-              subDistrict: true,
-              village: true,
-              pincode: true,
-              playingRole: true,
-              profilepic: true,
-            },
-          })
+          where: { id: player.id },
+          data: playerData,
+          select: {
+            id: true,
+            userId: true,
+            name: true,
+            battingStyle: true,
+            bowlingStyle: true,
+            state: true,
+            district: true,
+            subDistrict: true,
+            village: true,
+            pincode: true,
+            playingRole: true,
+            profilepic: true,
+          },
+        })
+        : await tx.player.findUnique({
+          where: { id: player.id },
+          select: {
+            id: true,
+            userId: true,
+            name: true,
+            battingStyle: true,
+            bowlingStyle: true,
+            state: true,
+            district: true,
+            subDistrict: true,
+            village: true,
+            pincode: true,
+            playingRole: true,
+            profilepic: true,
+          },
+        })
 
       return { user: updatedUser, player: updatedPlayer }
     })

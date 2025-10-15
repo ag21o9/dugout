@@ -43,7 +43,27 @@ userRouter.post('/login/verify-otp', async (req, res) => {
 		if (!secret) return res.status(500).json({ success: false, message: 'Server misconfigured: JWT_SECRET missing' })
 
 		const token = jwt.sign({ sub: user.id }, secret, { expiresIn: '7d' })
-		return res.json({ success: true, token, user })
+
+		// include linked player if exists (match register-with-player response shape)
+		const player = await prisma.player.findFirst({
+			where: { userId: user.id },
+			select: {
+				id: true,
+				userId: true,
+				name: true,
+				battingStyle: true,
+				bowlingStyle: true,
+				state: true,
+				district: true,
+				subDistrict: true,
+				village: true,
+				pincode: true,
+				playingRole: true,
+				profilepic: true,
+			},
+		})
+
+		return res.json({ success: true, token, data: { user, player } })
 	} catch (err) {
 		return res.status(500).json({ success: false, message: 'Failed to verify OTP' })
 	}

@@ -12,7 +12,7 @@ matchRouter.use('/:matchId/innings', inningsRouter)
 matchRouter.get('/', async (req, res) => {
     try {
         const { status, limit = 50, offset = 0 } = req.query
-        
+
         // Build where clause based on status filter
         let where = {}
         if (status) {
@@ -20,9 +20,9 @@ matchRouter.get('/', async (req, res) => {
             if (validStatuses.includes(status.toUpperCase())) {
                 where.status = status.toUpperCase()
             } else {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: `Invalid status. Valid values: ${validStatuses.join(', ')}` 
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid status. Valid values: ${validStatuses.join(', ')}`
                 })
             }
         }
@@ -175,7 +175,7 @@ matchRouter.post('/', requireAuth, async (req, res) => {
     }
 })
 
-// POST /matches/:matchId/start → Start a match (status → LIVE)
+
 matchRouter.post('/:matchId/start', requireAuth, async (req, res) => {
     try {
         const { matchId } = req.params
@@ -196,6 +196,165 @@ matchRouter.post('/:matchId/start', requireAuth, async (req, res) => {
         return res.status(500).json({ success: false, message: 'Failed to start match' })
     }
 })
+
+
+
+// GET /matches/:matchId/scorecard → Full match scorecard (per-innings batting/bowling + result)
+matchRouter.get('/:matchId/scorecard', async (req, res) => {
+    try {
+        const { matchId } = req.params
+        const match = await prisma.match.findUnique({
+            where: { id: matchId },
+            select: {
+                id: true,
+                teamA: { select: { id: true, name: true, logoUrl: true } },
+                teamB: { select: { id: true, name: true, logoUrl: true } },
+                teamAId: true,
+                teamBId: true,
+                status: true,
+                winningTeamId: true,
+                winningMargin: true,
+                result: true,
+                ballsPerOver: true,
+                oversLimit: true,
+                innings: {
+                    select: {
+                        id: true,
+                        inningNumber: true,
+                        battingTeam: { select: { id: true, name: true, logoUrl: true } },
+                        bowlingTeam: { select: { id: true, name: true, logoUrl: true } },
+                        runs: true,
+                        wickets: true,
+                        overs: true,
+                    },
+                    orderBy: { inningNumber: 'asc' },
+                },
+            },
+        })
+        if (!match) return res.status(404).json({ success: false, message: 'Match not found' })
+
+        const ballsPerOver = match.ballsPerOver || 6
+
+        // For each inning, load batting and bowling entries
+        const inningsDetailed = await Promise.all(
+            (match.innings || []).map(async (inn) => {
+                const [batting, bowling] = await Promise.all([
+                    prisma.battingEntry.findMany({
+                        where: { inningId: inn.id },
+                        select: {
+                            battingOrder: true,
+                            runs: true,
+                            ballsFaced: true,
+                            fours: true,
+                            sixes: true,
+                            out: true,
+                            dismissal: true,
+                            player: { select: { id: true, name: true } },
+                        },
+                        orderBy: [{ battingOrder: 'asc' }],
+                    }),
+                    prisma.bowlingEntry.findMany({
+                        where: { inningId: inn.id },
+                        select: {
+                            balls: true,
+                            runsConceded: true,
+                            wickets: true,
+                            maidens: true,
+                            player: { select: { id: true, name: true } },
+                        },
+                        orderBy: [{ runsConceded: 'asc' }, { wickets: 'desc' }],
+                    }),
+                ])
+
+                const battingOut = batting.map((bt) => ({
+                    playerId: bt.player.id,
+                    playerName: bt.player.name,
+                    battingOrder: bt.battingOrder,
+                    runs: bt.runs,
+                    ballsFaced: bt.ballsFaced,
+                    fours: bt.fours,
+                    sixes: bt.sixes,
+                    out: bt.out,
+                    dismissal: bt.dismissal || null,
+                    strikeRate: bt.ballsFaced > 0 ? Number(((bt.runs / bt.ballsFaced) * 100).toFixed(2)) : 0,
+                }))
+
+                const bowlingOut = bowling.map((b) => {
+                    const overs = Math.floor(b.balls / ballsPerOver)
+                    const balls = b.balls % ballsPerOver
+                    const economy = b.balls > 0 ? (b.runsConceded * ballsPerOver) / b.balls : 0
+                    return {
+                        playerId: b.player.id,
+                        playerName: b.player.name,
+                        overs: `${overs}.${balls}`,
+                        balls: b.balls,
+                        runsConceded: b.runsConceded,
+                        wickets: b.wickets,
+                        maidens: b.maidens,
+                        economy: Number(economy.toFixed(2)),
+                    }
+                })
+
+                return {
+                    inningId: inn.id,
+                    inningNumber: inn.inningNumber,
+                    battingTeam: inn.battingTeam,
+                    bowlingTeam: inn.bowlingTeam,
+                    runs: inn.runs,
+                    wickets: inn.wickets,
+                    overs: inn.overs,
+                    batting: battingOut,
+                    bowling: bowlingOut,
+                }
+            })
+        )
+
+        // Compute result/chase info
+        let result = null
+        if (match.status === 'COMPLETED' && match.result) {
+            result = {
+                finished: true,
+                resultText: match.result,
+                winningTeamId: match.winningTeamId || null,
+                winningMargin: match.winningMargin || null,
+            }
+        } else if ((match.innings || []).length > 1) {
+            // compute based on innings
+            const prevInnings = match.innings.slice(0, -1)
+            const last = match.innings[match.innings.length - 1]
+            const prevMax = Math.max(...prevInnings.map((i) => i.runs || 0))
+            const target = prevMax + 1
+            const chaseAchieved = (last.runs || 0) >= target
+            if (chaseAchieved) {
+                const wicketsLeft = Math.max(0, 10 - (last.wickets || 0))
+                result = {
+                    finished: true,
+                    chase: true,
+                    winningTeamId: last.battingTeam?.id || null,
+                    winningBy: `${wicketsLeft} wicket${wicketsLeft === 1 ? '' : 's'}`,
+                }
+            } else {
+                const runMargin = (prevMax || 0) - (last.runs || 0)
+                result = {
+                    finished: true,
+                    chase: false,
+                    winningTeamId: prevInnings.find((i) => i.runs === prevMax)?.battingTeam?.id || null,
+                    winningBy: `${runMargin} run${runMargin === 1 ? '' : 's'}`,
+                }
+            }
+        } else {
+            result = { finished: false }
+        }
+
+        return res.json({ success: true, data: { match: { id: match.id, teamA: match.teamA, teamB: match.teamB, status: match.status }, innings: inningsDetailed, result } })
+    } catch (err) {
+        console.error(err)
+        return res.status(500).json({ success: false, message: 'Failed to fetch scorecard' })
+    }
+})
+
+
+
 
 // POST /matches/:matchId/end → End a match (set winner, margin, result)
 matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
@@ -265,12 +424,12 @@ matchRouter.post('/:matchId/end', requireAuth, async (req, res) => {
         const wicketsAllOut = secondInning.wickets >= 10
         const scoresLevel = secondInning.runs === firstInning.runs
 
-        if (!chaseAchieved && !wicketsAllOut && !allBallsUsed) {
-            return res.status(400).json({ success: false, message: 'Second innings still in progress' })
-        }
-        if (scoresLevel && !wicketsAllOut && !allBallsUsed) {
-            return res.status(400).json({ success: false, message: 'Second innings still in progress' })
-        }
+        // if (!chaseAchieved && !wicketsAllOut && !allBallsUsed) {
+        //     return res.status(400).json({ success: false, message: 'Second innings still in progress' })
+        // }
+        // if (scoresLevel && !wicketsAllOut && !allBallsUsed) {
+        //     return res.status(400).json({ success: false, message: 'Second innings still in progress' })
+        // }
 
         let winningTeamId = null
         let winningTeamName = null

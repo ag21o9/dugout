@@ -1,5 +1,6 @@
 import express from 'express'
 import prisma from './prisma.js'
+import jwt from 'jsonwebtoken'
 import { requireAuth } from './middleware/auth.js'
 import { upload, uploadImageBuffer } from '../config/utils.js'
 
@@ -246,6 +247,25 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
         if (!tournament) return res.status(404).json({ success: false, message: 'Tournament not found' })
         const { matches = [], ...rest } = tournament
 
+        // determine if requesting user is the organiser (owner flag)
+        let owner = false
+        try {
+            const auth = req.headers.authorization || ''
+            const [, token] = auth.split(' ')
+            if (token) {
+                const secret = process.env.JWT_SECRET
+                if (secret) {
+                    const payload = jwt.verify(token, secret)
+                    if (payload && payload.sub) {
+                        const user = await prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true } })
+                        if (user && user.id === tournament.organiser) owner = true
+                    }
+                }
+            }
+        } catch (e) {
+
+        }
+
         const processedMatches = matches.map(({ innings = [], ...matchData }) => {
             const sortedInnings = [...innings].sort((a, b) => (a.inningNumber ?? 0) - (b.inningNumber ?? 0))
             const lastInning = sortedInnings[sortedInnings.length - 1] || null
@@ -267,7 +287,7 @@ tournamentRouter.get('/:tournamentId', async (req, res) => {
             }
         })
 
-        return res.json({ success: true, data: { ...rest, matches: processedMatches } })
+    return res.json({ success: true, data: { ...rest, matches: processedMatches, owner } })
     } catch (err) {
         console.log(err)
         return res.status(500).json({ success: false, message: 'Failed to fetch tournament' })

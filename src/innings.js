@@ -837,6 +837,7 @@ inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
                 id: true,
                 match: { select: { id: true, ballsPerOver: true, oversLimit: true, status: true } },
                 matchId: true,
+                battingTeamId: true,
                 strikerId: true,
                 nonStrikerId: true,
                 currentBowlerId: true,
@@ -847,6 +848,10 @@ inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
         })
         if (!inning || inning.matchId !== matchId) return res.status(404).json({ success: false, message: 'Inning not found' })
         if (inning.match.status !== 'LIVE') return res.status(400).json({ success: false, message: 'Match is not LIVE' })
+
+        const battingTeamSize = inning.battingTeamId
+            ? await prisma.teamMembership.count({ where: { teamId: inning.battingTeamId } })
+            : 0
 
         // Prevent ball if wicket waiting for batsman selection
         if (inning.strikerId == null || inning.nonStrikerId == null || inning.currentBowlerId == null) {
@@ -946,10 +951,17 @@ inningsRouter.post('/:inningId/balls', requireAuth, async (req, res) => {
             }
         }
 
+        if (!inningEnded && wicket) {
+            const maxWicketsAllowed = battingTeamSize > 0 ? Math.min(10, battingTeamSize) : 10
+            if (newTotals.wickets >= maxWicketsAllowed) {
+                inningEnded = true
+                const updatedInning = await prisma.inning.update({ where: { id: inningId }, data: updateData, select: { id: true, runs: true, wickets: true, overs: true, strikerId: true, nonStrikerId: true, currentBowlerId: true } })
+            }
+        }
+
+
         const updatedInning = await prisma.inning.update({ where: { id: inningId }, data: updateData, select: { id: true, runs: true, wickets: true, overs: true, strikerId: true, nonStrikerId: true, currentBowlerId: true } })
 
-        // Update scorecards
-        // Batting entry for striker
         const batterId = inning.strikerId
         const legalDeliveryFaced = addBall && (ballType === 'NORMAL' || ballType === 'FREE_HIT' || ballType === 'BYE' || ballType === 'LEG_BYE')
         const runsToBatter = (ballType === 'NORMAL' || ballType === 'FREE_HIT') ? runs : 0
